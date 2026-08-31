@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+results/
+staticfiles/
+*.csv
+
+# Session & Secret Artifacts
+.env
+adapt_session*.json
+mailtester/key.txt
+mailtester/*.exe
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
