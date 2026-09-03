@@ -1,5 +1,5 @@
 # Production Dockerfile for Django + Playwright on Railway
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Prevent Python from buffering stdout/stderr and writing .pyc files
 ENV PYTHONUNBUFFERED=1 \
