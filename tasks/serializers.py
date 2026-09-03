@@ -60,8 +60,8 @@ class TaskSerializer(serializers.ModelSerializer):
     )
     password = serializers.CharField(
         write_only=True,
-        required=True,
-        help_text="Adapt.io account password.",
+        required=False,
+        help_text="Adapt.io account password (optional if ADAPT_PASSWORD is in .env).",
     )
     download_url = serializers.SerializerMethodField(
         help_text="Direct or signed download URL for the generated CSV result file."
@@ -112,6 +112,16 @@ class TaskSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and "filters" not in data:
+            filters = {}
+            for k in FILTER_FIELDS:
+                if k in data:
+                    filters[k] = data[k]
+            if filters:
+                data = {**data, "filters": filters}
+        return super().to_internal_value(data)
+
     def get_download_url(self, obj: Task) -> str:
         if obj.status != Task.Status.COMPLETED:
             return ""
@@ -120,12 +130,28 @@ class TaskSerializer(serializers.ModelSerializer):
         return f"/api/tasks/{obj.pk}/download/"
 
     def validate(self, attrs):
-        email = attrs.get("email") or attrs.get("account_email")
+        import os
+        email = (
+            attrs.get("email")
+            or attrs.get("account_email")
+            or os.getenv("ADAPT_EMAIL", "").strip()
+        )
         if not email:
             raise serializers.ValidationError(
-                {"account_email": "An email for the target Adapt.io account is required."}
+                {"account_email": "An email for the target Adapt.io account is required (in payload or via ADAPT_EMAIL in .env)."}
             )
+
+        password = (
+            attrs.get("password")
+            or os.getenv("ADAPT_PASSWORD", "").strip()
+        )
+        if not password:
+            raise serializers.ValidationError(
+                {"password": "An Adapt.io password is required (in payload or via ADAPT_PASSWORD in .env)."}
+            )
+
         attrs["account_email"] = email
+        attrs["password"] = password
         attrs.pop("email", None)
         return attrs
 
@@ -161,13 +187,13 @@ class StartTaskRequestSerializer(serializers.Serializer):
     Request payload schema for starting a new scraping task.
     """
     email = serializers.EmailField(
-        required=True,
-        help_text="Adapt.io account email",
+        required=False,
+        help_text="Adapt.io account email (optional if ADAPT_EMAIL is configured in .env)",
     )
     password = serializers.CharField(
         write_only=True,
-        required=True,
-        help_text="Adapt.io account password",
+        required=False,
+        help_text="Adapt.io account password (optional if ADAPT_PASSWORD is configured in .env)",
     )
     filters = TaskFiltersSerializer(
         required=False,

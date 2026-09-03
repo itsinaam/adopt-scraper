@@ -175,9 +175,23 @@ class StartTaskView(APIView):
         request=StartTaskRequestSerializer,
         examples=[
             OpenApiExample(
+                "Filters Only Example (Environment Credentials)",
+                summary="Lead Scraping with Only Filters",
+                description="Starts scraping using credentials (ADAPT_EMAIL and ADAPT_PASSWORD) configured in environment (.env).",
+                value={
+                    "filters": {
+                        "job_titles": ["CEO", "Founder", "Managing Director"],
+                        "industries": ["Information Technology and Services", "Computer Software"],
+                        "locations": ["United States", "United Kingdom"],
+                        "employee_counts": ["25 - 100", "100 - 250"],
+                    },
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
                 "Standard Search Example",
-                summary="Lead Scraping with Filters",
-                description="Example payload to scrape CFOs in Software companies with verified emails.",
+                summary="Lead Scraping with Filters & Explicit Credentials",
+                description="Example payload with explicit email and password.",
                 value={
                     "email": "umer@techfy.io",
                     "password": "your_adapt_password",
@@ -195,8 +209,6 @@ class StartTaskView(APIView):
                 summary="Minimal Search without Filters",
                 description="Starts scraping without any filter constraints.",
                 value={
-                    "email": "umer@techfy.io",
-                    "password": "your_adapt_password",
                     "filters": {},
                 },
                 request_only=True,

@@ -38,6 +38,36 @@ class TaskSerializerTests(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("filters", serializer.errors)
 
+    def test_only_filters_uses_env_credentials(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"ADAPT_EMAIL": "env_user@example.com", "ADAPT_PASSWORD": "env_password"}):
+            serializer = TaskSerializer(
+                data={
+                    "filters": {"job_titles": ["CEO", "Founder"]},
+                }
+            )
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+            self.assertEqual(serializer.validated_data["account_email"], "env_user@example.com")
+            self.assertEqual(serializer.validated_data["password"], "env_password")
+            self.assertEqual(serializer.validated_data["filters"]["job_titles"], ["CEO", "Founder"])
+
+    def test_flat_filters_automatically_nested(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"ADAPT_EMAIL": "env_user@example.com", "ADAPT_PASSWORD": "env_password"}):
+            serializer = TaskSerializer(
+                data={
+                    "job_titles": ["CEO"],
+                    "locations": ["United States"],
+                }
+            )
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+            self.assertEqual(serializer.validated_data["filters"]["job_titles"], ["CEO"])
+            self.assertEqual(serializer.validated_data["filters"]["locations"], ["United States"])
+
 
 class TaskAPITests(APITestCase):
     def test_health_check(self):
