@@ -6,6 +6,7 @@ Includes Swagger UI, ReDoc, and OpenAPI Schema endpoints.
 
 from django.contrib import admin
 from django.urls import include, path
+from django.views.generic import RedirectView
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularRedocView,
@@ -13,6 +14,9 @@ from drf_spectacular.views import (
 )
 
 urlpatterns = [
+    # Redirect root to Swagger UI documentation
+    path("", RedirectView.as_view(url="/api/docs/", permanent=False)),
+
     # Admin
     path("admin/", admin.site.urls),
 

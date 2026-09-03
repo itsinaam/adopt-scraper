@@ -20,7 +20,13 @@ class BrowserManager:
 
         launch_options = {
             "headless": os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true",
-            "args": ["--disable-blink-features=AutomationControlled"],
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+                "--disable-gpu",
+            ],
         }
         proxy = self._proxy_settings()
         if proxy:

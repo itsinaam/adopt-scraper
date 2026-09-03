@@ -33,6 +33,28 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# Automatically support Railway public domain if assigned
+railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+if railway_domain and railway_domain not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(railway_domain)
+
+# CSRF Trusted Origins for Railway & browser-based requests
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "DJANGO_CSRF_TRUSTED_ORIGINS",
+        "https://*.railway.app,https://*.up.railway.app,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080",
+    ).split(",")
+    if origin.strip()
+]
+if railway_domain:
+    railway_origin = f"https://{railway_domain}"
+    if railway_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(railway_origin)
+
+# Trust Railway reverse proxy HTTPS header
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 
 # Application definition
 
@@ -83,22 +105,23 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 import sys
 
-# Database - Supabase PostgreSQL Connection
+# Database - Supabase / Railway PostgreSQL Connection
 raw_database_url = os.getenv("DATABASE_URL", "").strip()
 if raw_database_url.startswith("postgresql+psycopg2://"):
     raw_database_url = raw_database_url.replace("postgresql+psycopg2://", "postgresql://", 1)
-
-if not raw_database_url and "test" not in sys.argv:
-    raise ImproperlyConfigured(
-        "DATABASE_URL is not set in environment variables. "
-        "Supabase connection string is required."
-    )
 
 if "test" in sys.argv:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": ":memory:",
+        }
+    }
+elif not raw_database_url:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
         }
     }
 else:
