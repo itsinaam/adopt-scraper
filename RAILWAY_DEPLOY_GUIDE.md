@@ -81,7 +81,9 @@ Before or while the build is progressing, set your environment variables:
 DJANGO_SECRET_KEY=generate-a-strong-random-50-character-secret-key
 DJANGO_DEBUG=false
 DJANGO_ALLOWED_HOSTS=*
-DJANGO_CSRF_TRUSTED_ORIGINS=https://*.railway.app,https://*.up.railway.app
+DJANGO_CSRF_TRUSTED_ORIGINS=https://*.railway.app,https://*.up.railway.app,http://localhost:5173,http://127.0.0.1:5173
+DJANGO_CORS_ALLOW_ALL=true
+DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000
 PLAYWRIGHT_HEADLESS=true
 
 # Database (Supabase PostgreSQL Connection URL)
