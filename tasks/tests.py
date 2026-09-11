@@ -153,3 +153,83 @@ class TaskAPITests(APITestCase):
     def test_swagger_ui_endpoint(self):
         response = self.client.get("/api/docs/")
         self.assertEqual(response.status_code, 200)
+
+    def test_stop_running_task(self):
+        task = Task.objects.create(
+            account_email="running@example.com",
+            status=Task.Status.RUNNING,
+        )
+        response = self.client.post("/api/tasks/stop/")
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.FAILED)
+        self.assertEqual(task.current_step, "STOPPED")
+
+    def test_stop_task_by_id(self):
+        task = Task.objects.create(
+            account_email="running_id@example.com",
+            status=Task.Status.RUNNING,
+        )
+        response = self.client.post(f"/api/tasks/{task.pk}/stop/")
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.FAILED)
+
+    def test_stop_task_not_running(self):
+        response = self.client.post("/api/tasks/stop/")
+        self.assertEqual(response.status_code, 404)
+
+    def test_task_add_log_and_serialization(self):
+        task = Task.objects.create(
+            account_email="logged@example.com",
+            status=Task.Status.RUNNING,
+            current_step="INITIALIZING",
+        )
+        task.add_log("Session loaded successfully.", step="SESSION_LOADED")
+        task.add_log("Opening Prospect Search...", step="SEARCH")
+        task.save()
+        task.refresh_from_db()
+
+        self.assertEqual(len(task.logs), 2)
+        self.assertEqual(task.logs[0]["message"], "Session loaded successfully.")
+        self.assertEqual(task.logs[0]["step"], "SESSION_LOADED")
+        self.assertIn("timestamp", task.logs[0])
+
+        serializer = TaskSerializer(task)
+        self.assertIn("logs", serializer.data)
+        self.assertEqual(len(serializer.data["logs"]), 2)
+
+    def test_logs_endpoints_removed(self):
+        task = Task.objects.create(
+            account_email="logs_endpoint@example.com",
+            status=Task.Status.RUNNING,
+            current_step="SCRAPING",
+            progress=50,
+            message="Scraping in progress...",
+        )
+        res_by_id = self.client.get(f"/api/tasks/{task.pk}/logs/")
+        self.assertEqual(res_by_id.status_code, 404)
+
+        res_curr = self.client.get("/api/tasks/current/logs/")
+        self.assertEqual(res_curr.status_code, 404)
+
+    def test_start_task_no_conflict_when_running(self):
+        from unittest.mock import patch
+        Task.objects.create(
+            account_email="running@example.com",
+            status=Task.Status.RUNNING,
+        )
+        with patch("tasks.views.start_task") as mock_start:
+            response = self.client.post(
+                "/api/tasks/start/",
+                {
+                    "account_email": "new_task@example.com",
+                    "password": "secret_pass",
+                    "filters": {"job_titles": ["CEO"]},
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(response.data["task"]["account_email"], "new_task@example.com")
+            self.assertTrue(mock_start.called)
+

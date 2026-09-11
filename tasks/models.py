@@ -80,6 +80,12 @@ class Task(models.Model):
         blank=True,
     )
 
+    logs = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Chronological event logs with timestamps",
+    )
+
     created_at = models.DateTimeField(
         auto_now_add=True,
     )
@@ -87,6 +93,18 @@ class Task(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True,
     )
+
+    def add_log(self, message: str, step: str | None = None) -> None:
+        """Appends a new timestamped log entry to the task logs array."""
+        from django.utils import timezone
+        entry = {
+            "timestamp": timezone.now().isoformat(),
+            "message": message,
+            "step": step or self.current_step,
+        }
+        if not isinstance(self.logs, list):
+            self.logs = []
+        self.logs.append(entry)
 
     class Meta:
         ordering = ["-created_at"]

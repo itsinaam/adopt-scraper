@@ -8,19 +8,10 @@ from playwright.sync_api import Page
 logger = logging.getLogger(__name__)
 
 CONTACT_LINK_SELECTOR = 'a[href*="linkedin.com/in/"]'
-DEBUG_PATH = Path(__file__).resolve().parents[2] / "results" / "pagination_debug.log"
 
 
 def _write_pagination_debug(message: str) -> None:
-    try:
-        DEBUG_PATH.parent.mkdir(exist_ok=True)
-        with DEBUG_PATH.open("a", encoding="utf-8") as debug_file:
-            debug_file.write(
-                f"{datetime.now(timezone.utc).isoformat()} {message}\n"
-            )
-            debug_file.flush()
-    except OSError:
-        pass
+    print(f"[PAGINATION] {message}", flush=True)
 
 
 def _pagination_debug(page: Page, stage: str, visible_count: int = 0) -> str:
@@ -224,8 +215,8 @@ def _next_page(page: Page, previous_key: str) -> bool:
 
     _pagination_debug(page, "after_click")
 
-    # Give browser a brief pause to render either upgrade modal or new results
-    page.wait_for_timeout(1000)
+    # Give browser a 3-second pause to handle slow internet / page rendering
+    page.wait_for_timeout(3000)
 
     if _is_upgrade_modal_visible(page):
         logger.info("Adapt.io free tier limit popup detected. Finishing pagination gracefully.")
@@ -245,7 +236,7 @@ def _next_page(page: Page, previous_key: str) -> bool:
             arg={
                 "previousPage": page_label,
             },
-            timeout=10_000,
+            timeout=25_000,
         )
     except Exception:
         if _is_upgrade_modal_visible(page):
@@ -260,17 +251,23 @@ def _next_page(page: Page, previous_key: str) -> bool:
     try:
         page.locator(CONTACT_LINK_SELECTOR).first.wait_for(
             state="visible",
-            timeout=10_000,
+            timeout=25_000,
         )
         page.wait_for_function(
             """(previousKey) => {
-                const link = document.querySelector('a[href*="linkedin.com/in/"]');
-                return link && link.href !== previousKey;
+                const links = document.querySelectorAll('a[href*="linkedin.com/in/"]');
+                if (links.length === 0) return false;
+                return links[0] && links[0].href !== previousKey;
             }""",
             arg=previous_key,
-            timeout=10_000,
+            timeout=25_000,
         )
     except Exception:
+        page.wait_for_timeout(3000)
+        pagination_text_now = pagination.locator(".text").first.inner_text() if pagination.locator(".text").count() else ""
+        if pagination_text_now and pagination_text_now != page_label and page.locator(CONTACT_LINK_SELECTOR).count() > 0:
+            _pagination_debug(page, "after_change_fallback")
+            return True
         logger.warning("Contacts list did not update for next page. Stopping pagination.")
         return False
 
@@ -312,17 +309,117 @@ def _refresh_stale_pagination(page: Page, visible_count: int) -> None:
     )
 
 
-def scrape_prospects(page: Page) -> list[dict[str, str]]:
+def _set_rows_per_page(page: Page, count: str = "100", log_callback=None) -> bool:
+    """Sets the rows per page in the pagination dropdown (e.g. 100)."""
+    try:
+        dropdown = page.locator(".pagination-dropdown, .select-wrapper.pagination-dropdown").first
+        if not dropdown.count() or not dropdown.is_visible():
+            return False
+
+        display = dropdown.locator(".select-value-display").first
+        current_val = display.inner_text().strip() if display.count() else ""
+        if current_val == count:
+            if log_callback:
+                log_callback(f"Rows per page already set to {count}.")
+            print(f"[PAGINATION] Rows per page already set to {count}.", flush=True)
+            return True
+
+        if log_callback:
+            log_callback(f"Changing rows per page from {current_val or 'default'} to {count}...")
+        print(f"[PAGINATION] Changing rows per page from {current_val or 'default'} to {count}...", flush=True)
+
+        # Click dropdown to open options menu
+        try:
+            dropdown.click(timeout=5000)
+        except Exception:
+            dropdown.evaluate("el => el.click()")
+        page.wait_for_timeout(800)
+
+        # Target option element specifically by data-value or text
+        option_locators = (
+            page.locator(f'li[data-value="{count}"]'),
+            page.locator(f'.select-option[data-value="{count}"]'),
+            page.locator('li.select-option').filter(has_text=re.compile(rf"^\s*{re.escape(count)}\s*$")),
+            page.locator('.select-option').filter(has_text=re.compile(rf"^\s*{re.escape(count)}\s*$")),
+        )
+
+        clicked = False
+        for loc in option_locators:
+            if loc.count() > 0:
+                for i in range(loc.count()):
+                    candidate = loc.nth(i)
+                    if candidate.is_visible():
+                        candidate.click()
+                        clicked = True
+                        break
+            if clicked:
+                break
+
+        # JavaScript evaluate click fallback if Playwright click missed
+        if not clicked:
+            clicked = page.evaluate(
+                """(val) => {
+                    const el = document.querySelector(`li[data-value="${val}"]`)
+                        || document.querySelector(`.select-option[data-value="${val}"]`)
+                        || [...document.querySelectorAll('li.select-option, .select-option')].find(e => e.innerText.trim() === val);
+                    if (el) {
+                        el.click();
+                        return true;
+                    }
+                    return false;
+                }""",
+                count,
+            )
+
+        if not clicked:
+            logger.warning("Could not find option '%s' in pagination dropdown.", count)
+            print(f"[PAGINATION] Could not find option '{count}' in pagination dropdown.", flush=True)
+            page.keyboard.press("Escape")
+            return False
+
+        # As requested: wait 5s for page to load after selection
+        if log_callback:
+            log_callback(f"Selected {count} rows per page. Waiting 5s for page to load...")
+        print(f"[PAGINATION] Selected {count} rows per page. Waiting 5s for page to load...", flush=True)
+        page.wait_for_timeout(5000)
+
+        # Wait for table to reload with new page size
+        try:
+            page.locator(CONTACT_LINK_SELECTOR).first.wait_for(state="visible", timeout=30_000)
+            _wait_for_pagination(page)
+        except Exception:
+            pass
+
+        final_display = dropdown.locator(".select-value-display").first
+        final_val = final_display.inner_text().strip() if final_display.count() else ""
+        if log_callback:
+            log_callback(f"Rows per page successfully updated to {final_val or count}.")
+        print(f"[PAGINATION] Rows per page successfully updated to {final_val or count}.", flush=True)
+        return True
+
+    except Exception as exc:
+        logger.warning("Error setting rows per page to %s: %s", count, exc)
+        print(f"[PAGINATION] Error setting rows per page to {count}: {exc}", flush=True)
+        return False
+
+
+def scrape_prospects(page: Page, log_callback=None) -> list[dict[str, str]]:
     """Collect all visible contact cards, advancing through every result page."""
     _write_pagination_debug("SCRAPER_BUILD pagination-direct-debug-v1")
+    if log_callback:
+        log_callback("Waiting for contact cards to render on results page...")
     page.locator(CONTACT_LINK_SELECTOR).first.wait_for(
         state="visible",
         timeout=60_000,
     )
     _wait_for_pagination(page)
 
+    # Set rows per page to 100 as requested
+    _set_rows_per_page(page, count="100", log_callback=log_callback)
+
     results = []
     seen = set()
+    page_num = 1
     for _ in range(1000):
         page_rows = _extract_visible_contacts(page)
         _refresh_stale_pagination(page, len(page_rows))
@@ -333,6 +430,7 @@ def scrape_prospects(page: Page) -> list[dict[str, str]]:
             raise TimeoutError("no contact cards were rendered for the current page")
 
         _pagination_debug(page, "page_extracted", len(page_rows))
+        new_count = 0
         for row in page_rows:
             key = row["linkedin_profile_url"] or (
                 f"{row['first_name']} {row['last_name']}".strip()
@@ -340,9 +438,17 @@ def scrape_prospects(page: Page) -> list[dict[str, str]]:
             if key and key not in seen:
                 seen.add(key)
                 results.append(row)
+                new_count += 1
+
+        if log_callback:
+            log_callback(
+                f"Page {page_num}: Extracted {len(page_rows)} leads "
+                f"({len(results)} total unique leads collected so far)"
+            )
 
         previous_key = page_rows[0]["linkedin_profile_url"] or page_rows[0]["first_name"]
         if not _next_page(page, previous_key):
             break
+        page_num += 1
 
     return results

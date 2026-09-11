@@ -18,51 +18,58 @@ logger = logging.getLogger(__name__)
 
 
 def run_task(task_id: int, password: str):
+    import os
+    os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+
+    from django.db import close_old_connections
+    close_old_connections()
     task = Task.objects.get(pk=task_id)
 
-    try:
-        task.current_step = "OPENING_ADAPT"
-        task.progress = 5
-        task.message = "Opening Adapt.io..."
-        task.save(
-            update_fields=[
-                "current_step",
-                "progress",
-                "message",
-            ]
-        )
+    def log_step(message: str, step: str = None, progress: int = None):
+        print(f"[TASK {task_id}] [{step or task.current_step}] {message}", flush=True)
+        try:
+            close_old_connections()
+            task.message = message
+            if step:
+                task.current_step = step
+            if progress is not None:
+                task.progress = progress
+            task.add_log(message, step=task.current_step)
+            task.save(
+                update_fields=[
+                    "current_step",
+                    "progress",
+                    "message",
+                    "logs",
+                    "updated_at",
+                ]
+            )
+        except Exception:
+            pass
 
-        task.current_step = "RUNNING_PLAYWRIGHT"
-        task.progress = 10
-        task.message = "Logging in and opening Prospect Search..."
-        task.save(
-            update_fields=[
-                "current_step",
-                "progress",
-                "message",
-            ]
-        )
+    try:
+        log_step("Starting scraping task...", step="STARTING", progress=5)
 
         rows = run_in_thread(
             scrape_with_playwright,
             email=task.account_email,
             password=password,
             filters=task.filters,
-        )
-
-        task.current_step = "VERIFYING_EMAILS"
-        task.progress = 80
-        task.message = "Generating email candidates..."
-        task.save(
-            update_fields=[
-                "current_step",
-                "progress",
-                "message",
-                "updated_at",
-            ]
+            log_callback=log_step,
         )
 
         raw_row_count = len(rows)
+        log_step(
+            f"Adapt.io scraping finished: collected {raw_row_count} total prospect leads.",
+            step="LEADS_SCRAPED",
+            progress=75,
+        )
+
+        log_step(
+            "Generating email candidate permutations...",
+            step="GENERATING_CANDIDATES",
+            progress=80,
+        )
         enriched_rows = add_email_candidates(rows)
         candidates = [
             candidate
@@ -78,28 +85,20 @@ def run_task(task_id: int, password: str):
                 f"Could not generate email candidates for {raw_row_count} scraped leads"
             )
 
-        task.message = (
-            f"Running MailTester for {len(candidates)} email candidates..."
-        )
-        task.save(
-            update_fields=[
-                "message",
-                "updated_at",
-            ]
+        log_step(
+            f"Running MailTester verification for {len(candidates)} candidates...",
+            step="VERIFYING_EMAILS",
+            progress=85,
         )
         valid_emails = run_in_thread(verify_candidates, candidates)
-        task.progress = 90
-        task.message = (
+
+        log_step(
             f"MailTester finished: {len(valid_emails)} valid emails found "
-            f"from {len(candidates)} candidates."
+            f"from {len(candidates)} candidates.",
+            step="EMAILS_VERIFIED",
+            progress=92,
         )
-        task.save(
-            update_fields=[
-                "progress",
-                "message",
-                "updated_at",
-            ]
-        )
+
         rows = [
             {
                 **{
@@ -171,9 +170,15 @@ def run_task(task_id: int, password: str):
                 if storage_result:
                     storage_path = storage_result.get("storage_path", storage_path)
                     storage_url = storage_result.get("url", "")
+                    log_step("Exported CSV uploaded to cloud storage.", step="UPLOADED")
             except Exception as upload_err:
                 logger.warning("Supabase storage upload error (will fallback to local): %s", upload_err)
 
+        completion_msg = (
+            f"Completed. Scraped {len(rows)} prospects with valid emails "
+            f"from {raw_row_count} leads; generated candidates for "
+            f"{rows_with_candidates} leads."
+        )
         task.status = Task.Status.COMPLETED
         task.current_step = "COMPLETED"
         task.progress = 100
@@ -181,14 +186,12 @@ def run_task(task_id: int, password: str):
         task.total_candidates_generated = len(candidates)
         task.total_verified_emails = len(valid_emails)
         task.verified_leads = rows
-        task.message = (
-            f"Completed. Scraped {len(rows)} prospects with valid emails "
-            f"from {raw_row_count} leads; generated candidates for "
-            f"{rows_with_candidates} leads."
-        )
+        task.message = completion_msg
         task.result_path = storage_path
         task.result_url = storage_url
         task.completed_at = timezone.now()
+        task.add_log(completion_msg, step="COMPLETED")
+        print(f"[TASK {task_id}] [COMPLETED] {completion_msg}", flush=True)
         task.save(
             update_fields=[
                 "status",
@@ -199,6 +202,7 @@ def run_task(task_id: int, password: str):
                 "total_verified_emails",
                 "verified_leads",
                 "message",
+                "logs",
                 "result_path",
                 "result_url",
                 "completed_at",
@@ -208,11 +212,14 @@ def run_task(task_id: int, password: str):
 
     except Exception as exc:
         logger.exception("Error executing task %s", task_id)
+        error_msg = f"{type(exc).__name__}: {str(exc)[:900]}"
+        print(f"[TASK {task_id}] [FAILED] {error_msg}", flush=True)
         task.status = Task.Status.FAILED
         task.current_step = "FAILED"
-        task.message = "Adapt.io scraping failed."
-        task.error = f"{type(exc).__name__}: {str(exc)[:900]}"
+        task.message = f"Adapt.io scraping failed: {type(exc).__name__}"
+        task.error = error_msg
         task.completed_at = timezone.now()
+        task.add_log(f"Scraping task failed: {error_msg}", step="FAILED")
 
         task.save(
             update_fields=[
@@ -220,6 +227,7 @@ def run_task(task_id: int, password: str):
                 "current_step",
                 "message",
                 "error",
+                "logs",
                 "completed_at",
                 "updated_at",
             ]

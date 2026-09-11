@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Set
@@ -109,7 +110,7 @@ def verify_single_email_api(
     email: str,
     api_key: str,
     session: Optional[requests.Session] = None,
-    max_retries: int = 5,
+    max_retries: int = 10,
 ) -> bool:
     """
     Verifies a single email candidate against the MailTester Ninja HTTP REST API.
@@ -117,7 +118,7 @@ def verify_single_email_api(
     """
     client = session or requests
     attempt = 0
-    base_backoff = 2.0
+    base_backoff = 3.0
 
     while attempt < max_retries:
         attempt += 1
@@ -130,7 +131,11 @@ def verify_single_email_api(
 
             # Check for HTTP 429 Rate Limit
             if response.status_code == 429:
-                backoff_time = (base_backoff * (2 ** (attempt - 1))) + random.uniform(0.5, 1.5)
+                backoff_time = (base_backoff * (1.5 ** (attempt - 1))) + random.uniform(1.0, 2.5)
+                print(
+                    f"[MAILTESTER] [RATE LIMIT 429] on {email}. Retrying in {backoff_time:.1f}s (attempt {attempt}/{max_retries})...",
+                    flush=True,
+                )
                 logger.warning(
                     "MailTester API rate limit (HTTP 429) on %s. Retrying in %.2fs (attempt %d/%d)...",
                     email,
@@ -149,7 +154,11 @@ def verify_single_email_api(
 
             # Check if API returned rate limit message in body
             if "too many requests" in message.lower() or "adapt your query rates" in message.lower():
-                backoff_time = (base_backoff * (2 ** (attempt - 1))) + random.uniform(1.0, 2.5)
+                backoff_time = (base_backoff * (1.5 ** (attempt - 1))) + random.uniform(1.5, 3.0)
+                print(
+                    f"[MAILTESTER] [RATE LIMIT] on {email}: '{message}'. Retrying in {backoff_time:.1f}s (attempt {attempt}/{max_retries})...",
+                    flush=True,
+                )
                 logger.warning(
                     "MailTester rate limit in payload for %s: '%s'. Retrying in %.2fs (attempt %d/%d)...",
                     email,
@@ -163,6 +172,10 @@ def verify_single_email_api(
 
             # Check validity
             is_valid = code == "ok" or message.lower() in ("accepted", "valid")
+            status_text = "VALID" if is_valid else "INVALID"
+            detail = message or code or ("accepted" if is_valid else "rejected")
+            print(f"[MAILTESTER] {email} -> {status_text} ({detail})", flush=True)
+
             if is_valid:
                 logger.info("MailTester verified VALID email: %s (%s - %s)", email, code, message)
             else:
@@ -171,7 +184,11 @@ def verify_single_email_api(
             return is_valid
 
         except (requests.RequestException, ValueError) as exc:
-            backoff_time = (base_backoff * (2 ** (attempt - 1))) + random.uniform(0.5, 1.5)
+            backoff_time = (base_backoff * (1.5 ** (attempt - 1))) + random.uniform(1.0, 2.0)
+            print(
+                f"[MAILTESTER] [NETWORK ERROR] on {email}: {exc}. Retrying in {backoff_time:.1f}s (attempt {attempt}/{max_retries})...",
+                flush=True,
+            )
             logger.warning(
                 "MailTester API error for %s (%s). Retrying in %.2fs (attempt %d/%d)...",
                 email,
@@ -182,6 +199,7 @@ def verify_single_email_api(
             )
             time.sleep(backoff_time)
 
+    print(f"[MAILTESTER] [EXCEEDED RETRIES] for {email}. Marking as INVALID.", flush=True)
     logger.error("Exceeded max retries for email %s. Marking as unverifiable.", email)
     return False
 
@@ -196,22 +214,38 @@ def verify_candidates(candidates: list[str]) -> set[str]:
 
     # Deduplicate while preserving order
     unique_candidates = list(dict.fromkeys(candidates))
+    total_candidates = len(unique_candidates)
     api_key = get_mailtester_api_key()
 
-    concurrency = int(os.getenv("MAILTESTER_CONCURRENCY", "2"))
+    concurrency = int(os.getenv("MAILTESTER_CONCURRENCY", "1"))
+    print(
+        f"[MAILTESTER] Starting verification for {total_candidates} candidates (concurrency={concurrency})...",
+        flush=True,
+    )
     logger.info(
         "Starting MailTester REST API verification for %d candidates with concurrency=%d...",
-        len(unique_candidates),
+        total_candidates,
         concurrency,
     )
 
     valid_emails: Set[str] = set()
     session = requests.Session()
+    counter_lock = threading.Lock()
+    completed_counter = 0
 
     def _worker(email: str) -> tuple[str, bool]:
-        # Slight pacing delay between calls to respect rate limits (~5 per sec)
-        time.sleep(random.uniform(0.05, 0.15))
+        nonlocal completed_counter
+        # Pacing delay between calls to respect rate limits
+        time.sleep(random.uniform(0.35, 0.6))
         is_valid = verify_single_email_api(email=email, api_key=api_key, session=session)
+        with counter_lock:
+            completed_counter += 1
+            curr = completed_counter
+        if curr % 25 == 0 or is_valid:
+            print(
+                f"[MAILTESTER] Progress: {curr}/{total_candidates} verified ({(curr / total_candidates) * 100:.1f}%) | {len(valid_emails) + (1 if is_valid else 0)} valid found so far",
+                flush=True,
+            )
         return email, is_valid
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -229,9 +263,13 @@ def verify_candidates(candidates: list[str]) -> set[str]:
                 email = future_to_email[future]
                 logger.error("Unexpected error verifying candidate %s: %s", email, exc)
 
+    print(
+        f"[MAILTESTER] Verification complete: Found {len(valid_emails)} valid emails out of {total_candidates} candidates.",
+        flush=True,
+    )
     logger.info(
         "MailTester API verification complete. Found %d valid emails out of %d candidates.",
         len(valid_emails),
-        len(unique_candidates),
+        total_candidates,
     )
     return valid_emails

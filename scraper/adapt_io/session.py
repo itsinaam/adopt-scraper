@@ -17,11 +17,15 @@ LEADS_URL = "https://leads.adapt.io/"
 
 
 def _get_session_file_path(email: str | None = None) -> Path:
-    base_dir = getattr(settings, "BASE_DIR", Path("."))
+    try:
+        from django.conf import settings
+        base_dir = Path(settings.BASE_DIR)
+    except Exception:
+        base_dir = Path(".")
     if email:
         safe_email = email.replace("@", "_at_").replace(".", "_")
-        return Path(base_dir) / f"adapt_session_{safe_email}.json"
-    return Path(base_dir) / "adapt_session.json"
+        return base_dir / f"adapt_session_{safe_email}.json"
+    return base_dir / "adapt_session.json"
 
 
 def _load_session_state(email: str | None = None) -> dict | None:
@@ -62,7 +66,9 @@ def authenticate_with_playwright(
             manager.start(storage_state=session_state)
             page = manager.new_page()
             if is_authenticated(page):
-                return manager.get_storage_state()
+                new_state = manager.get_storage_state()
+                _save_session_state(new_state, email)
+                return new_state
         finally:
             manager.close()
 
@@ -91,53 +97,82 @@ def scrape_with_playwright(
     email: str,
     password: str,
     filters: dict,
+    log_callback=None,
 ) -> list[dict[str, str]]:
     """Reuse existing saved session if valid; otherwise login once and persist session."""
+    def emit_log(message: str, step: str = None, progress: int = None):
+        print(f"[ADAPT] [{step or 'INFO'}] {message}", flush=True)
+        if log_callback:
+            try:
+                log_callback(message, step=step, progress=progress)
+            except Exception:
+                pass
+        logger.info(message)
+
+    emit_log("Initializing browser environment for Adapt.io...", step="STARTING_BROWSER", progress=8)
     manager = BrowserManager()
     session_state = _load_session_state(email)
 
     try:
-        manager.start(storage_state=session_state)
-        page = manager.new_page()
-
         authenticated = False
         if session_state:
+            emit_log("Found saved Adapt.io session. Verifying validity...", step="VERIFYING_SESSION", progress=12)
+            manager.start(storage_state=session_state)
+            page = manager.new_page()
             try:
                 if is_authenticated(page):
                     authenticated = True
-                    logger.info("Reusing existing saved Adapt.io session for %s", email)
+                    emit_log("Saved session verified! Reusing session (login bypassed).", step="SESSION_REUSED", progress=20)
+                    try:
+                        _save_session_state(manager.get_storage_state(), email)
+                    except Exception:
+                        pass
+                else:
+                    emit_log("Saved session has expired. Will log in with credentials...", step="SESSION_EXPIRED", progress=15)
             except Exception as e:
-                logger.warning("Failed checking saved session: %s", e)
+                emit_log(f"Session validation encountered issue ({e}). Proceeding to login...", step="SESSION_CHECK_FAILED", progress=15)
                 authenticated = False
+        else:
+            emit_log("No saved session found. Starting new browser session for login...", step="LOGIN_REQUIRED", progress=12)
+            manager.start()
+            page = manager.new_page()
 
         if not authenticated:
-            logger.info("No active session found. Logging in to Adapt.io for %s...", email)
+            if not password:
+                raise ValueError("Adapt.io password is required because no valid saved session is available.")
+            emit_log(f"Logging in to Adapt.io for {email}...", step="LOGGING_IN", progress=20)
             try:
                 login_to_adapt(page, email=email, password=password)
             except PlaywrightTimeoutError as exc:
-                raise TimeoutError("login timed out") from exc
+                raise TimeoutError("Adapt.io login timed out") from exc
 
-            if not is_authenticated(page):
-                raise ValueError("Adapt.io authentication failed.")
-
-            # Save state for subsequent runs
+            emit_log("Login succeeded! Saving session state for future runs...", step="SAVING_SESSION", progress=30)
             new_state = manager.get_storage_state()
             _save_session_state(new_state, email)
 
+        emit_log("Navigating to Prospect Search...", step="OPENING_SEARCH", progress=35)
         try:
             open_prospect_search(page)
         except PlaywrightTimeoutError as exc:
-            raise TimeoutError("opening Prospect Search timed out") from exc
+            raise TimeoutError("Opening Prospect Search timed out") from exc
 
+        emit_log("Applying search filters on Adapt.io...", step="APPLYING_FILTERS", progress=45)
         try:
-            apply_filters(page, filters)
+            apply_filters(page, filters, log_callback=lambda msg: emit_log(msg, step="APPLYING_FILTERS"))
         except PlaywrightTimeoutError as exc:
-            raise TimeoutError("applying filters or executing search timed out") from exc
+            raise TimeoutError("Applying filters or executing search timed out") from exc
 
+        emit_log("Scraping prospect leads from search results...", step="SCRAPING_RESULTS", progress=55)
         try:
-            return scrape_prospects(page)
+            rows = scrape_prospects(page, log_callback=lambda msg: emit_log(msg, step="SCRAPING_RESULTS"))
+            emit_log(f"Successfully scraped {len(rows)} raw prospects from Adapt.io.", step="SCRAPING_COMPLETED", progress=75)
+            try:
+                _save_session_state(manager.get_storage_state(), email)
+            except Exception:
+                pass
+            return rows
         except PlaywrightTimeoutError as exc:
-            raise TimeoutError("reading search results timed out") from exc
+            raise TimeoutError("Reading search results timed out") from exc
 
     finally:
         manager.close()

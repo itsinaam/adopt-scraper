@@ -102,6 +102,7 @@ class TaskResultsView(APIView):
             "total_verified_emails": task.total_verified_emails,
             "download_url": download_link,
             "completed_at": task.completed_at,
+            "logs": task.logs or [],
             "verified_leads": task.verified_leads,
         }
         return Response(data, status=status.HTTP_200_OK)
@@ -223,26 +224,10 @@ class StartTaskView(APIView):
                 ),
             ),
             400: OpenApiResponse(description="Validation error in payload"),
-            409: OpenApiResponse(description="Another scraping task is currently running"),
         },
         tags=["Tasks"],
     )
     def post(self, request):
-        active_task = (
-            Task.objects
-            .filter(status=Task.Status.RUNNING)
-            .first()
-        )
-
-        if active_task is not None:
-            return Response(
-                {
-                    "detail": "Another task is already running.",
-                    "task": TaskSerializer(active_task).data,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
         serializer = TaskSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -250,6 +235,7 @@ class StartTaskView(APIView):
         password = serializer.validated_data["password"]
         filters = serializer.validated_data.get("filters", {})
 
+        now = timezone.now()
         task = Task.objects.create(
             account_email=account_email,
             filters=filters,
@@ -257,7 +243,14 @@ class StartTaskView(APIView):
             current_step="STARTING",
             progress=0,
             message="Task is starting...",
-            started_at=timezone.now(),
+            logs=[
+                {
+                    "timestamp": now.isoformat(),
+                    "message": "Scraping task initialized and queued.",
+                    "step": "STARTING",
+                }
+            ],
+            started_at=now,
         )
 
         start_task(task.id, password)
@@ -265,4 +258,67 @@ class StartTaskView(APIView):
         return Response(
             {"task": TaskSerializer(task).data},
             status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class StopTaskView(APIView):
+    """
+    Stops the currently running scraping task or a specific task by ID.
+    """
+
+    @extend_schema(
+        summary="Stop Scraping Task",
+        description="Cancels and marks a running scraping task as STOPPED/FAILED so a new task can be started.",
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                description="Task stopped successfully",
+                response=inline_serializer(
+                    name="StopTaskResponse",
+                    fields={
+                        "detail": serializers.CharField(),
+                        "task": TaskSerializer(),
+                    },
+                ),
+            ),
+            404: OpenApiResponse(description="No running task found"),
+        },
+        tags=["Tasks"],
+    )
+    def post(self, request, task_id: int = None):
+        if task_id is not None:
+            task = Task.objects.filter(pk=task_id, status=Task.Status.RUNNING).first()
+        else:
+            task = Task.objects.filter(status=Task.Status.RUNNING).first()
+
+        if task is None:
+            return Response(
+                {"detail": "No running task found to stop."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        task.status = Task.Status.FAILED
+        task.current_step = "STOPPED"
+        task.message = "Task was stopped by user."
+        task.error = "Manually stopped by user."
+        task.completed_at = timezone.now()
+        task.add_log("Task was stopped by user.", step="STOPPED")
+        task.save(
+            update_fields=[
+                "status",
+                "current_step",
+                "message",
+                "error",
+                "logs",
+                "completed_at",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            {
+                "detail": f"Task {task.pk} has been stopped.",
+                "task": TaskSerializer(task).data,
+            },
+            status=status.HTTP_200_OK,
         )

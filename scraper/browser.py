@@ -36,7 +36,14 @@ class BrowserManager:
             **launch_options,
         )
 
-        context_options = {}
+        context_options = {
+            "user_agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "viewport": {"width": 1280, "height": 800},
+        }
 
         if storage_state is not None:
             context_options["storage_state"] = storage_state
@@ -50,6 +57,7 @@ class BrowserManager:
         server = os.getenv("WEBSHARE_PROXY_SERVER")
         username = os.getenv("WEBSHARE_PROXY_USERNAME")
         password = os.getenv("WEBSHARE_PROXY_PASSWORD")
+        bypass = os.getenv("WEBSHARE_PROXY_BYPASS", "www.adapt.io,*.adapt.io")
 
         if not server:
             return None
@@ -63,6 +71,8 @@ class BrowserManager:
                 username=username,
                 password=password,
             )
+        if bypass:
+            proxy["bypass"] = bypass
         return proxy
 
     def new_page(self) -> Page:

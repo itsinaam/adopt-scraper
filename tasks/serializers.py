@@ -89,6 +89,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "result_url",
             "download_url",
             "error",
+            "logs",
             "created_at",
             "updated_at",
         ]
@@ -108,6 +109,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "result_url",
             "download_url",
             "error",
+            "logs",
             "created_at",
             "updated_at",
         ]
@@ -202,6 +204,21 @@ class StartTaskRequestSerializer(serializers.Serializer):
     )
 
 
+class TaskLogItemSerializer(serializers.Serializer):
+    timestamp = serializers.CharField(help_text="ISO 8601 timestamp of log entry")
+    message = serializers.CharField(help_text="Detailed log message")
+    step = serializers.CharField(required=False, allow_blank=True, help_text="Execution step name")
+
+
+class TaskLogsResponseSerializer(serializers.Serializer):
+    task_id = serializers.IntegerField(help_text="Task ID")
+    status = serializers.CharField(help_text="Current task status")
+    current_step = serializers.CharField(help_text="Current execution step")
+    progress = serializers.IntegerField(help_text="Progress percentage 0-100")
+    message = serializers.CharField(help_text="Latest task status message")
+    logs = TaskLogItemSerializer(many=True, help_text="Chronological list of task log entries")
+
+
 class TaskResultsResponseSerializer(serializers.Serializer):
     """
     Structured results response designed for Frontend UI dashboards.
@@ -215,4 +232,5 @@ class TaskResultsResponseSerializer(serializers.Serializer):
     total_verified_emails = serializers.IntegerField(help_text="Total verified valid emails found")
     download_url = serializers.CharField(allow_blank=True, help_text="CSV file download link")
     completed_at = serializers.DateTimeField(allow_null=True)
+    logs = TaskLogItemSerializer(many=True, default=list, help_text="Chronological task log events")
     verified_leads = LeadContactSerializer(many=True, help_text="List of all verified leads")
