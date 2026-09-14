@@ -2,6 +2,9 @@ FILTER_FIELDS = (
     "job_titles",
     "industries",
     "locations",
+    "cities",
+    "countries",
+    "states",
     "employee_counts",
 )
 

@@ -142,6 +142,24 @@ def _extract_visible_contacts(page: Page) -> list[dict[str, str]]:
                     ["verified", "valid"].includes(value.toLowerCase())
                 ) || "";
 
+                const industryWraps = [...row.querySelectorAll('.industry-content-info .info-wrap')];
+                let industry = "";
+                for (const wrap of industryWraps) {
+                    if (wrap.querySelector('svg[title="Employee Count"]')) continue;
+                    const val = (wrap.querySelector("span")?.innerText || wrap.innerText || "").replace(/\\s+/g, " ").trim();
+                    if (val && !headcountOptions.includes(val)) {
+                        industry = val;
+                        break;
+                    }
+                }
+                if (!industry) {
+                    const indEl = row.querySelector('.industry-content-info svg[title="Industry"]')?.closest('.info-wrap')?.querySelector("span")
+                               || row.querySelector('.industry-content-info svg[title="Industry"]')?.parentElement?.querySelector("span");
+                    if (indEl) {
+                        industry = (indEl.innerText || "").replace(/\\s+/g, " ").trim();
+                    }
+                }
+
                 const nameParts = name.split(/\\s+/).filter(Boolean);
                 rows.push({
                     first_name: nameParts[0] || "",
@@ -151,6 +169,7 @@ def _extract_visible_contacts(page: Page) -> list[dict[str, str]]:
                     company_domain: domains[0] || "",
                     employee_count: headcount,
                     location: location,
+                    industry: industry,
                     linkedin_profile_url: contactUrl,
                 });
             }

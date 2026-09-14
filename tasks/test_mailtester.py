@@ -8,6 +8,7 @@ from django.test import SimpleTestCase
 from .mailtester import (
     _read_valid_emails,
     verify_candidates,
+    verify_leads_early_stop,
     verify_single_email_api,
 )
 
@@ -148,3 +149,90 @@ class MailTesterAPITests(SimpleTestCase):
         result = verify_candidates(candidates)
 
         self.assertEqual(result, {"yes@example.com"})
+
+    @patch("tasks.mailtester.time.sleep", return_value=None)
+    @patch("tasks.mailtester.verify_single_email_api")
+    @patch("tasks.mailtester.get_mailtester_api_key", return_value="test_key")
+    def test_verify_leads_early_stop_first_hit_breaks_loop(self, mock_get_key, mock_verify, mock_sleep):
+        # Lead has 8 candidates. Candidate 0 is valid. Candidates 1..7 should NEVER be checked.
+        candidates = [f"cand_{i}@example.com" for i in range(8)]
+        lead = {"first_name": "John", "last_name": "Doe", "email_candidates": candidates}
+
+        mock_verify.side_effect = lambda email, **kw: email == "cand_0@example.com"
+
+        verified_leads, valid_emails, stats = verify_leads_early_stop([lead])
+
+        self.assertEqual(len(verified_leads), 1)
+        self.assertEqual(verified_leads[0]["email"], "cand_0@example.com")
+        self.assertEqual(valid_emails, {"cand_0@example.com"})
+        self.assertEqual(mock_verify.call_count, 1)  # Only candidate 0 checked!
+        self.assertEqual(stats["checks_made"], 1)
+        self.assertEqual(stats["checks_saved"], 7)  # Saved 7 calls!
+
+    @patch("tasks.mailtester.time.sleep", return_value=None)
+    @patch("tasks.mailtester.verify_single_email_api")
+    @patch("tasks.mailtester.get_mailtester_api_key", return_value="test_key")
+    def test_verify_leads_early_stop_fallback_to_second_hit(self, mock_get_key, mock_verify, mock_sleep):
+        # Candidate 0 invalid, candidate 1 valid -> stops at candidate 1, skips 2..7
+        candidates = [f"user_{i}@company.com" for i in range(8)]
+        lead = {"first_name": "Jane", "last_name": "Smith", "email_candidates": candidates}
+
+        mock_verify.side_effect = lambda email, **kw: email == "user_1@company.com"
+
+        verified_leads, valid_emails, stats = verify_leads_early_stop([lead])
+
+        self.assertEqual(verified_leads[0]["email"], "user_1@company.com")
+        self.assertEqual(mock_verify.call_count, 2)  # Checked candidate 0 and 1
+        self.assertEqual(stats["checks_made"], 2)
+        self.assertEqual(stats["checks_saved"], 6)
+
+    @patch("tasks.mailtester.time.sleep", return_value=None)
+    @patch("tasks.mailtester.verify_single_email_api")
+    @patch("tasks.mailtester.get_mailtester_api_key", return_value="test_key")
+    def test_verify_leads_early_stop_no_valid_candidates(self, mock_get_key, mock_verify, mock_sleep):
+        # All candidates invalid -> lead email empty, 0 calls saved
+        candidates = ["a@bad.com", "b@bad.com", "c@bad.com"]
+        lead = {"first_name": "Bob", "last_name": "Brown", "email_candidates": candidates}
+
+        mock_verify.return_value = False
+
+        verified_leads, valid_emails, stats = verify_leads_early_stop([lead])
+
+        self.assertEqual(verified_leads[0]["email"], "")
+        self.assertEqual(len(valid_emails), 0)
+        self.assertEqual(mock_verify.call_count, 3)
+        self.assertEqual(stats["checks_made"], 3)
+        self.assertEqual(stats["checks_saved"], 0)
+
+    @patch("tasks.mailtester.time.sleep", return_value=None)
+    @patch("tasks.mailtester.verify_single_email_api")
+    @patch("tasks.mailtester.get_mailtester_api_key", return_value="test_key")
+    def test_verify_leads_early_stop_domain_pattern_priority(self, mock_get_key, mock_verify, mock_sleep):
+        import os
+        from unittest.mock import patch
+
+        lead_1 = {
+            "first_name": "Alice",
+            "last_name": "Wong",
+            "email_candidates": ["alice.wong@acme.com", "awong@acme.com", "alicewong@acme.com"],
+        }
+        lead_2 = {
+            "first_name": "Bob",
+            "last_name": "Smith",
+            "email_candidates": ["bob.smith@acme.com", "bsmith@acme.com", "bobsmith@acme.com"],
+        }
+
+        # Acme uses format index 1 (flast)
+        mock_verify.side_effect = lambda email, **kw: email in ("awong@acme.com", "bsmith@acme.com")
+
+        with patch.dict(os.environ, {"MAILTESTER_CONCURRENCY": "1"}):
+            verified_leads, valid_emails, stats = verify_leads_early_stop([lead_1, lead_2])
+
+        self.assertEqual(verified_leads[0]["email"], "awong@acme.com")
+        self.assertEqual(verified_leads[1]["email"], "bsmith@acme.com")
+        # Lead 1 checked alice.wong (fail) then awong (pass) -> 2 checks
+        # Lead 2 prioritized bsmith (pass on 1st attempt!) -> 1 check
+        # Total checks = 3 instead of 4
+        self.assertEqual(mock_verify.call_count, 3)
+        self.assertEqual(stats["checks_made"], 3)
+        self.assertEqual(stats["checks_saved"], 3)

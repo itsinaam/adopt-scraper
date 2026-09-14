@@ -118,46 +118,48 @@ def _first_visible_locator(
     raise TimeoutError(f"{description} did not appear")
 
 
-def apply_locations(page: Page, locations: list[str]) -> None:
-    if not locations:
+def _apply_location_tab(page: Page, tab_name: str, values: list[str]) -> None:
+    cleaned_values = [v.strip() for v in values if isinstance(v, str) and v.strip()]
+    if not cleaned_values:
         return
 
-    cleaned_locations = [loc.strip() for loc in locations if loc and loc.strip()]
-    if not cleaned_locations:
-        return
+    tab_title = tab_name.strip().title()
 
-    open_filter(page, "Location")
-
-    # Switch to Country tab if not already active
-    active_country_tab = page.locator(".tab.active").filter(
-        has_text=re.compile(r"^Country$", re.IGNORECASE)
-    )
-    if active_country_tab.count() == 0 or not active_country_tab.first.is_visible():
-        country_tab_candidates = (
-            page.locator(".tab").filter(has_text=re.compile(r"^Country$", re.IGNORECASE)),
-            page.locator(".tab", has_text="Country"),
-            page.get_by_role("tab", name="Country"),
-            page.get_by_text("Country", exact=True),
+    # Switch to tab if not already active
+    tab_pattern = re.compile(rf"^\s*{re.escape(tab_title)}\s*$", re.IGNORECASE)
+    active_tab = page.locator(".tab.active").filter(has_text=tab_pattern)
+    if active_tab.count() == 0 or not active_tab.first.is_visible():
+        tab_candidates = (
+            page.locator(".tab").filter(has_text=tab_pattern),
+            page.locator(".tab", has_text=tab_title),
+            page.get_by_role("tab", name=tab_title),
+            page.get_by_text(tab_title, exact=True),
         )
-        if not _click_first_visible(country_tab_candidates, page, timeout_seconds=10):
-            raise TimeoutError("Country tab did not appear in Location filter")
+        if not _click_first_visible(tab_candidates, page, timeout_seconds=10):
+            raise TimeoutError(f"{tab_title} tab did not appear in Location filter")
+        page.wait_for_timeout(300)
 
-    country_input = _first_visible_locator(
-        page.locator('input[placeholder="Country"], input[placeholder*="Country"]'),
+    tab_input = _first_visible_locator(
+        page.locator(
+            f'input[placeholder="{tab_title}" i], '
+            f'input[placeholder*="{tab_title}" i], '
+            f'.top-wrapper input, '
+            f'input[type="text"]'
+        ),
         page,
         timeout_seconds=10,
-        description="Country input",
+        description=f"{tab_title} input",
     )
 
-    for location in cleaned_locations:
-        country_input.fill("")
-        country_input.fill(location)
-        page.wait_for_timeout(300)
+    for item in cleaned_values:
+        tab_input.fill("")
+        tab_input.fill(item)
+        page.wait_for_timeout(400)
 
         # Select the first result matching the search from the suggestion dropdown
         first_result_candidates = (
             page.locator(".suggestion-wrapper").get_by_text(
-                re.compile(rf"^\s*{re.escape(location)}", re.IGNORECASE)
+                re.compile(rf"^\s*{re.escape(item)}", re.IGNORECASE)
             ),
             page.locator(".suggestion-wrapper [role='option']"),
             page.locator(".suggestion-wrapper label"),
@@ -167,7 +169,7 @@ def apply_locations(page: Page, locations: list[str]) -> None:
             page.locator(".suggestion-wrapper > *").filter(has_text=re.compile(r"\S")),
             page.get_by_text(
                 re.compile(
-                    rf"^{re.escape(location)}.*$",
+                    rf"^{re.escape(item)}.*$",
                     re.IGNORECASE,
                 ),
             ),
@@ -181,6 +183,41 @@ def apply_locations(page: Page, locations: list[str]) -> None:
             continue
 
         page.wait_for_timeout(300)
+
+
+def apply_locations(page: Page, locations) -> None:
+    if not locations:
+        return
+
+    open_filter(page, "Location")
+
+    # If locations is a dict: e.g. {"country": ["Canada"], "city": ["Halifax (NS)"]}
+    if isinstance(locations, dict):
+        for key, vals in locations.items():
+            if not vals:
+                continue
+            if not isinstance(vals, list):
+                vals = [vals] if isinstance(vals, str) else []
+            k_lower = key.strip().lower()
+            if k_lower in ("country", "countries"):
+                _apply_location_tab(page, "Country", vals)
+            elif k_lower in ("city", "cities"):
+                _apply_location_tab(page, "City", vals)
+            elif k_lower in ("state", "states", "region", "regions"):
+                _apply_location_tab(page, "State", vals)
+            else:
+                _apply_location_tab(page, key.capitalize(), vals)
+
+    # If locations is a list:
+    elif isinstance(locations, list):
+        dict_items = [item for item in locations if isinstance(item, dict)]
+        if dict_items:
+            for item in dict_items:
+                apply_locations(page, item)
+
+        string_items = [item for item in locations if isinstance(item, str) and item.strip()]
+        if string_items:
+            _apply_location_tab(page, "Country", string_items)
 
 
 def _check_options(page: Page, options: list[str]) -> None:
@@ -197,7 +234,6 @@ def _check_options(page: Page, options: list[str]) -> None:
 
         if not _click_first_visible(candidates, page, timeout_seconds=5):
             continue
-
 
 
 def apply_industries(page: Page, industries: list[str]) -> None:
@@ -220,27 +256,26 @@ def apply_industries(page: Page, industries: list[str]) -> None:
     for industry in cleaned_industries:
         search_input.fill("")
         search_input.fill(industry)
-        page.wait_for_timeout(600)
+        page.wait_for_timeout(300)
 
-        # Click the "All" checkbox / label to select all matching items for this search
-        all_checkbox = page.locator(".top-wrapper input[type='checkbox']")
-        if all_checkbox.count() > 0 and all_checkbox.first.is_checked():
-            continue
-
-        all_label_candidates = (
-            page.locator(".top-wrapper label").filter(has_text=re.compile(r"^All$", re.IGNORECASE)),
-            page.locator(".top-wrapper").get_by_text("All", exact=True),
-            page.locator(".top-wrapper label"),
-            page.locator("label").filter(has_text=re.compile(r"^All$", re.IGNORECASE)),
-            page.get_by_text("All", exact=True),
+        industry_pattern = re.compile(
+            rf"^\s*{re.escape(industry)}\s*$",
+            re.IGNORECASE,
+        )
+        candidates = (
+            page.locator(".option-wrapper").get_by_text(industry_pattern),
+            page.locator(".option-wrapper label").filter(has_text=industry_pattern),
+            page.locator(".option-wrapper [role='checkbox']"),
+            page.locator("label").filter(has_text=industry_pattern),
+            page.get_by_text(industry_pattern),
         )
 
-        if not _click_first_visible(all_label_candidates, page, timeout_seconds=5):
-            if all_checkbox.count() > 0:
-                try:
-                    all_checkbox.first.check(force=True)
-                except Exception:
-                    pass
+        if not _click_first_visible(
+            candidates,
+            page,
+            timeout_seconds=5,
+        ):
+            continue
 
         page.wait_for_timeout(400)
 
@@ -252,9 +287,30 @@ def apply_employee_counts(page: Page, employee_counts: list[str]) -> None:
 
 
 def apply_filters(page: Page, filters: dict, log_callback=None) -> None:
+    # Consolidate location filters (support top-level "cities", "countries", or nested "locations")
+    locations = filters.get("locations")
+    cities = filters.get("cities") or filters.get("city")
+    countries = filters.get("countries") or filters.get("country")
+    states = filters.get("states") or filters.get("state")
+
+    if cities or countries or states:
+        if not locations:
+            locations = {}
+        elif isinstance(locations, list) and all(isinstance(x, str) for x in locations):
+            locations = {"country": locations}
+        elif not isinstance(locations, dict):
+            locations = {}
+
+        if cities:
+            locations["city"] = (locations.get("city") or []) + (cities if isinstance(cities, list) else [cities])
+        if countries:
+            locations["country"] = (locations.get("country") or []) + (countries if isinstance(countries, list) else [countries])
+        if states:
+            locations["state"] = (locations.get("state") or []) + (states if isinstance(states, list) else [states])
+
     filter_steps = (
         ("Job Title", apply_job_titles, filters.get("job_titles", [])),
-        ("Location", apply_locations, filters.get("locations", [])),
+        ("Location", apply_locations, locations),
         ("Industry", apply_industries, filters.get("industries", [])),
         (
             "Employee Count",
@@ -265,10 +321,15 @@ def apply_filters(page: Page, filters: dict, log_callback=None) -> None:
 
     for filter_name, apply_filter, values in filter_steps:
         if values and log_callback:
-            log_callback(
-                f"Applying filter '{filter_name}': {', '.join(str(v) for v in values[:3])}"
-                f"{'...' if len(values) > 3 else ''}"
-            )
+            if isinstance(values, dict):
+                formatted_values = ", ".join(
+                    f"{k.capitalize()}={v}" for k, v in values.items() if v
+                )
+            elif isinstance(values, list):
+                formatted_values = f"{', '.join(str(v) for v in values[:3])}{'...' if len(values) > 3 else ''}"
+            else:
+                formatted_values = str(values)
+            log_callback(f"Applying filter '{filter_name}': {formatted_values}")
         try:
             apply_filter(page, values)
         except PlaywrightTimeoutError as exc:

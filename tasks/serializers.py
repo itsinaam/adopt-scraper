@@ -18,10 +18,19 @@ class TaskFiltersSerializer(serializers.Serializer):
         required=False,
         help_text="List of target industries (e.g. ['Software', 'Information Technology'])",
     )
-    locations = serializers.ListField(
+    locations = serializers.JSONField(
+        required=False,
+        help_text="Target locations: list of countries ['United States'], or object {'country': ['Canada'], 'city': ['Kitchener-Waterloo (ON)']}",
+    )
+    cities = serializers.ListField(
         child=serializers.CharField(),
         required=False,
-        help_text="List of target locations (e.g. ['United States', 'California', 'Lahore'])",
+        help_text="List of target cities (e.g. ['Kitchener-Waterloo (ON)', 'Halifax (NS)'])",
+    )
+    countries = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        help_text="List of target countries (e.g. ['United States', 'Canada'])",
     )
     employee_counts = serializers.ListField(
         child=serializers.ChoiceField(choices=EMPLOYEE_COUNT_OPTIONS),
@@ -41,6 +50,7 @@ class LeadContactSerializer(serializers.Serializer):
     company_domain = serializers.CharField(allow_blank=True, help_text="Domain name of company")
     employee_count = serializers.CharField(allow_blank=True, help_text="Company employee count range")
     location = serializers.CharField(allow_blank=True, help_text="Location / city / country")
+    industry = serializers.CharField(required=False, allow_blank=True, default="", help_text="Industry of company/lead")
     linkedin_profile_url = serializers.CharField(allow_blank=True, help_text="LinkedIn profile URL")
     email = serializers.EmailField(help_text="Verified deliverable email address")
 
@@ -170,7 +180,39 @@ class TaskSerializer(serializers.ModelSerializer):
             )
 
         for field in FILTER_FIELDS:
-            if field in value:
+            if field not in value:
+                continue
+
+            if field == "locations":
+                locs = value["locations"]
+                if isinstance(locs, list):
+                    for item in locs:
+                        if isinstance(item, dict):
+                            for sub_k, sub_v in item.items():
+                                if not isinstance(sub_v, list) or not all(isinstance(x, str) for x in sub_v):
+                                    raise serializers.ValidationError(
+                                        f"In 'locations', '{sub_k}' must be a list of strings."
+                                    )
+                        elif not isinstance(item, str):
+                            raise serializers.ValidationError(
+                                "Items in 'locations' must be strings (countries) or objects (e.g. {'city': ['...']})."
+                            )
+                elif isinstance(locs, dict):
+                    for sub_k, sub_v in locs.items():
+                        if isinstance(sub_v, list):
+                            if not all(isinstance(x, str) for x in sub_v):
+                                raise serializers.ValidationError(
+                                    f"In 'locations', all items in '{sub_k}' must be strings."
+                                )
+                        elif not isinstance(sub_v, str):
+                            raise serializers.ValidationError(
+                                f"In 'locations', '{sub_k}' must be a list of strings or a string."
+                            )
+                else:
+                    raise serializers.ValidationError(
+                        "'locations' must be a list (e.g. ['Canada']) or an object (e.g. {'city': ['Halifax (NS)'], 'country': ['Canada']})."
+                    )
+            else:
                 if not isinstance(value[field], list):
                     raise serializers.ValidationError(
                         f"'{field}' must be a list."

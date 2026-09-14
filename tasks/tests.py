@@ -68,6 +68,45 @@ class TaskSerializerTests(TestCase):
             self.assertEqual(serializer.validated_data["filters"]["job_titles"], ["CEO"])
             self.assertEqual(serializer.validated_data["filters"]["locations"], ["United States"])
 
+    def test_structured_locations_with_city_and_country(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"ADAPT_EMAIL": "env_user@example.com", "ADAPT_PASSWORD": "env_password"}):
+            serializer = TaskSerializer(
+                data={
+                    "filters": {
+                        "job_titles": ["CEO"],
+                        "locations": {
+                            "country": ["Canada", "United States"],
+                            "city": ["Kitchener-Waterloo (ON)", "Halifax (NS)"],
+                        },
+                    }
+                }
+            )
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+            locs = serializer.validated_data["filters"]["locations"]
+            self.assertEqual(locs["country"], ["Canada", "United States"])
+            self.assertEqual(locs["city"], ["Kitchener-Waterloo (ON)", "Halifax (NS)"])
+
+    def test_top_level_cities_and_countries(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"ADAPT_EMAIL": "env_user@example.com", "ADAPT_PASSWORD": "env_password"}):
+            serializer = TaskSerializer(
+                data={
+                    "filters": {
+                        "job_titles": ["CEO"],
+                        "cities": ["Halifax (NS)"],
+                        "countries": ["Canada"],
+                    }
+                }
+            )
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+            self.assertEqual(serializer.validated_data["filters"]["cities"], ["Halifax (NS)"])
+            self.assertEqual(serializer.validated_data["filters"]["countries"], ["Canada"])
+
 
 class TaskAPITests(APITestCase):
     def test_health_check(self):

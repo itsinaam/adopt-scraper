@@ -10,7 +10,7 @@ from scraper.adapt_io.session import scrape_with_playwright
 from scraper.adapt_io.worker import run_in_thread
 
 from .email_candidates import add_email_candidates
-from .mailtester import verify_candidates
+from .mailtester import verify_candidates, verify_leads_early_stop
 from .models import Task
 from .storage import supabase_storage
 
@@ -85,39 +85,74 @@ def run_task(task_id: int, password: str):
                 f"Could not generate email candidates for {raw_row_count} scraped leads"
             )
 
-        log_step(
-            f"Running MailTester verification for {len(candidates)} candidates...",
-            step="VERIFYING_EMAILS",
-            progress=85,
-        )
-        valid_emails = run_in_thread(verify_candidates, candidates)
-
-        log_step(
-            f"MailTester finished: {len(valid_emails)} valid emails found "
-            f"from {len(candidates)} candidates.",
-            step="EMAILS_VERIFIED",
-            progress=92,
+        enable_verification = (
+            os.getenv("ENABLE_MAILTESTER_VERIFICATION", "true").strip().lower()
+            in ("true", "1", "yes")
         )
 
-        rows = [
-            {
-                **{
-                    key: value
-                    for key, value in row.items()
-                    if key != "email_candidates"
-                },
-                "email": next(
-                    (
-                        candidate
-                        for candidate in row["email_candidates"]
-                        if candidate in valid_emails
-                    ),
-                    "",
-                ),
-            }
-            for row in enriched_rows
-            if any(candidate in valid_emails for candidate in row["email_candidates"])
-        ]
+        valid_emails = set()
+        stats = {}
+        if enable_verification:
+            log_step(
+                f"Starting Smart Early-Stop verification for {raw_row_count} leads (up to {len(candidates)} candidate combinations)...",
+                step="VERIFYING_EMAILS",
+                progress=82,
+            )
+
+            def _on_progress(completed: int, total: int, valids: int, checks: int, saved: int):
+                pct = (completed / total) * 100 if total else 0
+                step_progress = 82 + int((completed / total) * 11)  # 82% to 93%
+                log_step(
+                    f"Verifying leads: {completed}/{total} processed ({pct:.1f}%) | "
+                    f"{valids} valid emails found ({checks} checks made, {saved} redundant calls saved)",
+                    step="VERIFYING_EMAILS",
+                    progress=step_progress,
+                )
+
+            verified_leads, valid_emails, stats = run_in_thread(
+                verify_leads_early_stop,
+                enriched_rows,
+                progress_callback=_on_progress,
+            )
+
+            log_step(
+                f"MailTester Early-Stop complete: {len(valid_emails)} valid emails found "
+                f"from {raw_row_count} leads ({stats.get('checks_made', 0)} checks made, "
+                f"{stats.get('checks_saved', 0)} redundant checks saved!).",
+                step="EMAILS_VERIFIED",
+                progress=93,
+            )
+
+            # Filter rows to only those with valid verified emails
+            rows = [
+                row for row in verified_leads
+                if row.get("email")
+            ]
+        else:
+            log_step(
+                f"Email verification bypassed (ENABLE_MAILTESTER_VERIFICATION=false). "
+                f"Exporting all {raw_row_count} leads and {len(candidates)} candidate combinations...",
+                step="SAVING_RESULTS",
+                progress=90,
+            )
+            rows = [
+                {
+                    **{
+                        key: value
+                        for key, value in row.items()
+                        if key != "email_candidates"
+                    },
+                    "email": (row.get("email_candidates") or [""])[0],
+                    "email_candidates": row.get("email_candidates", []),
+                }
+                for row in enriched_rows
+            ]
+
+        task_industries = (task.filters or {}).get("industries", [])
+        default_industry = task_industries[0] if isinstance(task_industries, list) and task_industries else ""
+        for r in rows:
+            if not r.get("industry") and default_industry:
+                r["industry"] = default_industry
 
         result_directory = Path(settings.BASE_DIR) / "results"
         result_directory.mkdir(exist_ok=True)
@@ -127,35 +162,40 @@ def run_task(task_id: int, password: str):
         fieldnames = [
             "First Name",
             "Last Name",
-            "Job Title",
-            "Company Name",
-            "Company Domain",
-            "Employee Count",
-            "Location",
-            "LinkedIn Profile URL",
             "Email",
+            "Title",
+            "Company",
+            "Location",
+            "Industry",
+            "LInkedin",
+            "Website",
         ]
         with result_path.open("w", newline="", encoding="utf-8") as result_file:
             writer = csv.DictWriter(result_file, fieldnames=fieldnames)
-            if fieldnames:
-                writer.writeheader()
-                writer.writerows(
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(
                     {
                         "First Name": row.get("first_name", ""),
                         "Last Name": row.get("last_name", ""),
-                        "Job Title": row.get("job_title", ""),
-                        "Company Name": row.get("company_name", ""),
-                        "Company Domain": row.get("company_domain", ""),
-                        "Employee Count": row.get("employee_count", ""),
-                        "Location": row.get("location", ""),
-                        "LinkedIn Profile URL": row.get(
-                            "linkedin_profile_url",
-                            "",
-                        ),
                         "Email": row.get("email", ""),
+                        "Title": row.get("job_title", "") or row.get("title", ""),
+                        "Company": row.get("company_name", "") or row.get("company", ""),
+                        "Location": row.get("location", ""),
+                        "Industry": row.get("industry", "") or default_industry,
+                        "LInkedin": row.get("linkedin_profile_url", "") or row.get("linkedin", ""),
+                        "Website": row.get("company_domain", "") or row.get("website", ""),
                     }
-                    for row in rows
                 )
+
+        # Standalone clean list of all email combinations (ready for MailTester Desktop App or bulk tools)
+        combinations_filename = f"task_{task.pk}_combinations.csv"
+        combinations_path = result_directory / combinations_filename
+        with combinations_path.open("w", newline="", encoding="utf-8") as comb_file:
+            comb_writer = csv.writer(comb_file)
+            comb_writer.writerow(["Email Combination"])
+            for candidate in candidates:
+                comb_writer.writerow([candidate])
 
         # Upload CSV to Supabase Storage bucket if configured
         storage_url = ""
@@ -174,11 +214,18 @@ def run_task(task_id: int, password: str):
             except Exception as upload_err:
                 logger.warning("Supabase storage upload error (will fallback to local): %s", upload_err)
 
-        completion_msg = (
-            f"Completed. Scraped {len(rows)} prospects with valid emails "
-            f"from {raw_row_count} leads; generated candidates for "
-            f"{rows_with_candidates} leads."
-        )
+        if enable_verification:
+            checks_saved = stats.get("checks_saved", 0)
+            completion_msg = (
+                f"Completed. Scraped {len(rows)} prospects with valid emails "
+                f"from {raw_row_count} leads (Early-Stop saved {checks_saved} redundant API calls); "
+                f"generated candidates for {rows_with_candidates} leads."
+            )
+        else:
+            completion_msg = (
+                f"Completed. Scraped {len(rows)} leads and generated {len(candidates)} "
+                f"email candidate combinations across {rows_with_candidates} leads (verification bypassed)."
+            )
         task.status = Task.Status.COMPLETED
         task.current_step = "COMPLETED"
         task.progress = 100
