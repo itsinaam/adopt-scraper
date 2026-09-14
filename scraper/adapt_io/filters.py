@@ -4,29 +4,83 @@ import time
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 
-def open_prospect_search(page: Page) -> None:
-    if "advanced-search" in page.url.lower():
-        return
+CONTACT_CRITERIA_FILTERS = {
+    "Job Title",
+    "Contact Location",
+    "Location",
+    "Department",
+    "Seniority",
+    "Name",
+}
 
-    candidates = (
-        page.get_by_role("button", name="Prospect Search", exact=True),
-        page.get_by_role("link", name="Prospect Search", exact=True),
-        page.get_by_text("Prospect Search", exact=True),
-        page.locator('a[href*="advanced-search"]'),
-    )
+COMPANY_CRITERIA_FILTERS = {
+    "Industry",
+    "Employee Count",
+    "Revenue",
+    "Company",
+    "Company Name",
+    "Company Location",
+}
 
-    if _click_first_visible(candidates, page, timeout_seconds=15):
-        try:
-            page.wait_for_url(lambda u: "advanced-search" in u.lower(), timeout=15_000)
-            return
-        except Exception:
-            pass
 
-    # Fallback: navigate directly to advanced-search URL if button didn't appear or navigate
+def _dismiss_popups(page: Page) -> None:
     try:
-        page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="domcontentloaded", timeout=20_000)
+        popup_selectors = [
+            'button:has-text("Skip")',
+            'button:has-text("Got it")',
+            'button:has-text("Close")',
+            'button:has-text("Maybe later")',
+            '.modal-header .close',
+            '[aria-label="Close"]',
+            '.walkme-action-destroy-1',
+            'div[data-ng-click*="close"]',
+        ]
+        for selector in popup_selectors:
+            elements = page.locator(selector)
+            for idx in range(elements.count()):
+                el = elements.nth(idx)
+                if el.is_visible():
+                    try:
+                        el.click()
+                        page.wait_for_timeout(300)
+                    except Exception:
+                        pass
     except Exception:
-        page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="commit", timeout=15_000)
+        pass
+
+
+def open_prospect_search(page: Page) -> None:
+    if "advanced-search" not in page.url.lower():
+        candidates = (
+            page.get_by_role("button", name="Prospect Search", exact=True),
+            page.get_by_role("link", name="Prospect Search", exact=True),
+            page.get_by_text("Prospect Search", exact=True),
+            page.locator('a[href*="advanced-search"]'),
+        )
+
+        if _click_first_visible(candidates, page, timeout_seconds=15):
+            try:
+                page.wait_for_url(lambda u: "advanced-search" in u.lower(), timeout=15_000)
+            except Exception:
+                pass
+
+        if "advanced-search" not in page.url.lower():
+            try:
+                page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="domcontentloaded", timeout=20_000)
+            except Exception:
+                page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="commit", timeout=15_000)
+
+    # Dismiss any welcome/tour modals if present
+    _dismiss_popups(page)
+
+    # Wait for the search interface and criteria sidebar to be ready
+    try:
+        page.wait_for_selector('text="Contact Criteria"', timeout=15_000)
+    except Exception:
+        try:
+            page.wait_for_selector('text="Job Title"', timeout=10_000)
+        except Exception:
+            page.wait_for_timeout(2000)
 
 
 def _click_first_visible(locators, page: Page, timeout_seconds: int) -> bool:
@@ -36,6 +90,10 @@ def _click_first_visible(locators, page: Page, timeout_seconds: int) -> bool:
             for index in range(locator.count()):
                 candidate = locator.nth(index)
                 if candidate.is_visible():
+                    try:
+                        candidate.scroll_into_view_if_needed(timeout=1000)
+                    except Exception:
+                        pass
                     candidate.click()
                     return True
 
@@ -48,16 +106,27 @@ def open_filter(
     page: Page,
     filter_name: str,
 ) -> None:
+    _dismiss_popups(page)
+
     filter_target = page.get_by_text(filter_name, exact=True)
-    if _click_first_visible((filter_target,), page, timeout_seconds=3):
+    
+    # 1. Give sufficient time for the UI to be ready (10 seconds instead of 3)
+    if _click_first_visible((filter_target,), page, timeout_seconds=10):
         return
 
-    # If the filter is under "Company Criteria" and collapsed, expand it
-    company_criteria = page.get_by_text("Company Criteria", exact=True)
-    if company_criteria.count() > 0 and company_criteria.first.is_visible():
-        company_criteria.first.click()
-        page.wait_for_timeout(300)
+    # 2. If not visible, expand the correct parent criteria section
+    if filter_name in CONTACT_CRITERIA_FILTERS:
+        contact_criteria = page.get_by_text(re.compile(r"^Contact\s+Criteria$", re.IGNORECASE))
+        if contact_criteria.count() > 0 and contact_criteria.first.is_visible():
+            contact_criteria.first.click()
+            page.wait_for_timeout(500)
+    elif filter_name in COMPANY_CRITERIA_FILTERS:
+        company_criteria = page.get_by_text(re.compile(r"^Company\s+Criteria$", re.IGNORECASE))
+        if company_criteria.count() > 0 and company_criteria.first.is_visible():
+            company_criteria.first.click()
+            page.wait_for_timeout(500)
 
+    # 3. Final attempt to find and click the filter target
     if not _click_first_visible(
         (filter_target,),
         page,

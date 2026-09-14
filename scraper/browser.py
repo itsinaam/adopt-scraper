@@ -42,7 +42,7 @@ class BrowserManager:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-            "viewport": {"width": 1280, "height": 800},
+            "viewport": {"width": 1920, "height": 1080},
         }
 
         if storage_state is not None:

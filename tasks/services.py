@@ -29,6 +29,9 @@ def run_task(task_id: int, password: str):
         print(f"[TASK {task_id}] [{step or task.current_step}] {message}", flush=True)
         try:
             close_old_connections()
+            if not Task.objects.filter(pk=task_id).exists():
+                print(f"[TASK {task_id}] Task record was deleted from DB! Aborting background execution.", flush=True)
+                raise SystemExit(f"Task {task_id} was deleted from database")
             task.message = message
             if step:
                 task.current_step = step
@@ -44,6 +47,8 @@ def run_task(task_id: int, password: str):
                     "updated_at",
                 ]
             )
+        except SystemExit:
+            raise
         except Exception:
             pass
 
