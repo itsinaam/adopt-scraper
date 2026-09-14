@@ -130,6 +130,54 @@ class TaskAPITests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(response.data.get("task"))
         self.assertEqual(response.data["task"]["account_email"], "current@example.com")
+        self.assertEqual(response.data["running_count"], 1)
+        self.assertEqual(len(response.data["tasks"]), 1)
+
+    def test_current_task_returns_all_running_tasks(self):
+        t1 = Task.objects.create(
+            account_email="task1@example.com",
+            status=Task.Status.RUNNING,
+            progress=30,
+            message="Task 1 running",
+        )
+        t2 = Task.objects.create(
+            account_email="task2@example.com",
+            status=Task.Status.RUNNING,
+            progress=60,
+            message="Task 2 running",
+        )
+        response = self.client.get("/api/tasks/current/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["running_count"], 2)
+        self.assertEqual(len(response.data["tasks"]), 2)
+        task_ids = [t["id"] for t in response.data["tasks"]]
+        self.assertIn(t1.id, task_ids)
+        self.assertIn(t2.id, task_ids)
+        self.assertEqual(response.data["task"]["id"], t2.id)
+
+    def test_task_list_defaults_to_running_only(self):
+        Task.objects.create(account_email="a@example.com", status=Task.Status.RUNNING)
+        Task.objects.create(account_email="b@example.com", status=Task.Status.FAILED)
+        res_default = self.client.get("/api/tasks/")
+        self.assertEqual(res_default.status_code, 200)
+        self.assertEqual(res_default.data["total"], 1)
+        self.assertEqual(res_default.data["tasks"][0]["status"], "RUNNING")
+
+        res_all = self.client.get("/api/tasks/?status=all")
+        self.assertEqual(res_all.status_code, 200)
+        self.assertEqual(res_all.data["total"], 2)
+
+    def test_current_task_ignores_failed_tasks(self):
+        Task.objects.create(account_email="failed@example.com", status=Task.Status.FAILED)
+        res = self.client.get("/api/tasks/current/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNone(res.data.get("task"))
+        self.assertEqual(res.data.get("running_count"), 0)
+        self.assertEqual(len(res.data.get("tasks")), 0)
+
+        res_running = self.client.get("/api/tasks/running/")
+        self.assertEqual(res_running.status_code, 200)
+        self.assertEqual(len(res_running.data.get("tasks")), 0)
 
     def test_running_task_cannot_be_downloaded(self):
         task = Task.objects.create(

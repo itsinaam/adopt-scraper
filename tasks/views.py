@@ -25,31 +25,83 @@ from .storage import supabase_storage
 
 class CurrentTaskView(APIView):
     """
-    Retrieves the most recent scraping task and its execution state.
+    Retrieves all currently active RUNNING scraping tasks and their execution states.
     """
 
     @extend_schema(
-        summary="Get Current Scraping Task",
-        description="Returns the latest task status, step progress, full metrics, and download details.",
+        summary="Get Active Running Scraping Tasks",
+        description="Returns all active RUNNING tasks (with their full logs and progress). Never returns FAILED or COMPLETED tasks.",
         responses={
             200: OpenApiResponse(
-                description="Latest task info (or null if no tasks exist)",
+                description="Active running tasks",
                 response=inline_serializer(
                     name="CurrentTaskResponse",
-                    fields={"task": TaskSerializer(allow_null=True)},
+                    fields={
+                        "running_count": serializers.IntegerField(),
+                        "tasks": TaskSerializer(many=True),
+                        "task": TaskSerializer(allow_null=True),
+                    },
                 ),
             )
         },
         tags=["Tasks"],
     )
     def get(self, request):
-        task = Task.objects.order_by("-created_at").first()
-
-        if task is None:
-            return Response({"task": None})
+        running_tasks = list(Task.objects.filter(status=Task.Status.RUNNING).order_by("-created_at"))
 
         return Response({
-            "task": TaskSerializer(task).data,
+            "running_count": len(running_tasks),
+            "tasks": TaskSerializer(running_tasks, many=True).data,
+            "task": TaskSerializer(running_tasks[0]).data if running_tasks else None,
+        })
+
+
+class TaskListView(APIView):
+    """
+    Retrieves tasks. By default filters to ONLY RUNNING tasks. Use ?status=all for all tasks, or ?status=failed, ?status=completed.
+    """
+
+    @extend_schema(
+        summary="List Scraping Tasks",
+        description="Returns tasks list. By default only returns RUNNING tasks. Pass ?status=all to include FAILED/COMPLETED, or ?status=failed.",
+        responses={
+            200: OpenApiResponse(
+                description="List of tasks",
+                response=inline_serializer(
+                    name="TaskListResponse",
+                    fields={
+                        "running_count": serializers.IntegerField(),
+                        "total": serializers.IntegerField(),
+                        "tasks": TaskSerializer(many=True),
+                    },
+                ),
+            )
+        },
+        tags=["Tasks"],
+    )
+    def get(self, request):
+        status_param = request.query_params.get("status")
+        queryset = Task.objects.all().order_by("-created_at")
+
+        if status_param:
+            if status_param.lower() != "all":
+                queryset = queryset.filter(status=status_param.upper())
+        else:
+            # Default to RUNNING tasks only so FAILED/COMPLETED tasks are not included
+            queryset = queryset.filter(status=Task.Status.RUNNING)
+
+        limit = request.query_params.get("limit")
+        if limit and limit.isdigit():
+            tasks = list(queryset[:int(limit)])
+        else:
+            tasks = list(queryset[:50])
+
+        running_count = Task.objects.filter(status=Task.Status.RUNNING).count()
+
+        return Response({
+            "running_count": running_count,
+            "total": len(tasks),
+            "tasks": TaskSerializer(tasks, many=True).data,
         })
 
 
