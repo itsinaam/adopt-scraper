@@ -1,5 +1,6 @@
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from rest_framework import serializers, status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -11,10 +12,13 @@ class HealthView(APIView):
     """
     Service health check endpoint.
     """
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     @extend_schema(
         summary="Health Check",
         description="Verify service availability and responsiveness.",
+        auth=[],
         responses={200: HealthResponseSerializer},
         tags=["System"],
     )
@@ -26,6 +30,7 @@ class TargetAccountLoginView(APIView):
     """
     Validates Adapt.io credentials using a headless browser session.
     """
+    permission_classes = [AllowAny]
 
     @extend_schema(
         summary="Authenticate Adapt.io Credentials",

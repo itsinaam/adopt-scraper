@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -7,6 +8,20 @@ class Task(models.Model):
         COMPLETED = "COMPLETED", "Completed"
         FAILED = "FAILED", "Failed"
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="tasks",
+        help_text="User who initiated the scraping task",
+    )
+    task_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Custom name or label for the scraping task",
+    )
     account_email = models.EmailField(
         help_text="Target Adapt.io account email",
     )
@@ -112,4 +127,5 @@ class Task(models.Model):
         verbose_name_plural = "Scraping Tasks"
 
     def __str__(self):
-        return f"Task {self.pk} [{self.account_email}] - {self.status}"
+        label = self.task_name or self.account_email
+        return f"Task {self.pk} [{label}] - {self.status}"

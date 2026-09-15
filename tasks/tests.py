@@ -109,6 +109,16 @@ class TaskSerializerTests(TestCase):
 
 
 class TaskAPITests(APITestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_superuser(
+            username="testadmin",
+            email="testadmin@example.com",
+            password="password",
+        )
+        self.client.force_authenticate(user=self.user)
+
     def test_health_check(self):
         response = self.client.get("/api/health/")
         self.assertEqual(response.status_code, 200)
@@ -375,5 +385,215 @@ class TaskAPITests(APITestCase):
         # 404 for non-existent
         res_404 = self.client.get("/api/tasks/99999/completed/")
         self.assertEqual(res_404.status_code, 404)
+
+
+class TaskUserIsolationAPITests(APITestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.admin = User.objects.create_superuser(
+            username="test_admin",
+            email="admin@test.com",
+            password="pass",
+        )
+        self.user1 = User.objects.create_user(
+            username="test_user1",
+            email="user1@test.com",
+            password="pass",
+        )
+        self.user2 = User.objects.create_user(
+            username="test_user2",
+            email="user2@test.com",
+            password="pass",
+        )
+
+        self.task_user1 = Task.objects.create(
+            user=self.user1,
+            task_name="User1 Campaign",
+            account_email="u1@adapt.com",
+            status=Task.Status.RUNNING,
+        )
+        self.task_user2 = Task.objects.create(
+            user=self.user2,
+            task_name="User2 Campaign",
+            account_email="u2@adapt.com",
+            status=Task.Status.RUNNING,
+        )
+
+    def test_user_only_sees_own_tasks_in_list(self):
+        self.client.force_authenticate(user=self.user1)
+        res = self.client.get("/api/tasks/?status=all")
+        self.assertEqual(res.status_code, 200)
+        task_ids = [t["id"] for t in res.data["tasks"]]
+        self.assertIn(self.task_user1.id, task_ids)
+        self.assertNotIn(self.task_user2.id, task_ids)
+        self.assertEqual(res.data["total"], 1)
+        self.assertEqual(res.data["tasks"][0]["task_name"], "User1 Campaign")
+
+    def test_admin_sees_all_tasks_across_users(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get("/api/tasks/?status=all")
+        self.assertEqual(res.status_code, 200)
+        task_ids = [t["id"] for t in res.data["tasks"]]
+        self.assertIn(self.task_user1.id, task_ids)
+        self.assertIn(self.task_user2.id, task_ids)
+        self.assertEqual(res.data["total"], 2)
+
+    def test_user_cannot_access_other_user_completed_task(self):
+        t_completed_u1 = Task.objects.create(
+            user=self.user1,
+            task_name="Completed 1",
+            account_email="u1@adapt.com",
+            status=Task.Status.COMPLETED,
+        )
+        # user2 cannot access user1's completed task
+        self.client.force_authenticate(user=self.user2)
+        res = self.client.get(f"/api/tasks/{t_completed_u1.id}/completed/")
+        self.assertEqual(res.status_code, 404)
+
+        # user1 can access their own completed task
+        self.client.force_authenticate(user=self.user1)
+        res_owner = self.client.get(f"/api/tasks/{t_completed_u1.id}/completed/")
+        self.assertEqual(res_owner.status_code, 200)
+        self.assertEqual(res_owner.data["task"]["task_name"], "Completed 1")
+
+        # admin can also access user1's completed task
+        self.client.force_authenticate(user=self.admin)
+        res_admin = self.client.get(f"/api/tasks/{t_completed_u1.id}/completed/")
+        self.assertEqual(res_admin.status_code, 200)
+
+    def test_user_cannot_stop_other_user_running_task(self):
+        self.client.force_authenticate(user=self.user2)
+        res = self.client.post(f"/api/tasks/{self.task_user1.id}/stop/")
+        self.assertEqual(res.status_code, 404)
+        self.task_user1.refresh_from_db()
+        self.assertEqual(self.task_user1.status, Task.Status.RUNNING)
+
+        # user1 can stop their own task
+        self.client.force_authenticate(user=self.user1)
+        res_stop = self.client.post(f"/api/tasks/{self.task_user1.id}/stop/")
+        self.assertEqual(res_stop.status_code, 200)
+        self.task_user1.refresh_from_db()
+        self.assertEqual(self.task_user1.status, Task.Status.FAILED)
+
+    def test_start_task_sets_task_name_and_owner(self):
+        from unittest.mock import patch
+        self.client.force_authenticate(user=self.user1)
+        with patch("tasks.views.start_task"):
+            res = self.client.post(
+                "/api/tasks/start/",
+                {
+                    "task_name": "Q4 Prospecting",
+                    "account_email": "u1@adapt.com",
+                    "password": "secret",
+                    "filters": {"job_titles": ["CTO"]},
+                },
+                format="json",
+            )
+            self.assertEqual(res.status_code, 202)
+            task_data = res.data["task"]
+            self.assertEqual(task_data["task_name"], "Q4 Prospecting")
+            self.assertEqual(task_data["user"], self.user1.username)
+
+    def test_user_can_delete_own_task(self):
+        self.client.force_authenticate(user=self.user1)
+        res = self.client.delete(f"/api/tasks/{self.task_user1.id}/")
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(Task.objects.filter(id=self.task_user1.id).exists())
+
+    def test_user_cannot_delete_other_user_task(self):
+        self.client.force_authenticate(user=self.user2)
+        res = self.client.delete(f"/api/tasks/{self.task_user1.id}/")
+        self.assertEqual(res.status_code, 404)
+        self.assertTrue(Task.objects.filter(id=self.task_user1.id).exists())
+
+    def test_admin_can_delete_any_task(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.delete(f"/api/tasks/{self.task_user2.id}/")
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(Task.objects.filter(id=self.task_user2.id).exists())
+
+    def test_csv_export_uses_payload_industry_and_replaces_revenue(self):
+        import csv
+        from pathlib import Path
+        from tasks.services import _process_scraping_results
+
+        task = Task.objects.create(
+            user=self.user1,
+            task_name="Software Scraping",
+            account_email="u1@adapt.com",
+            filters={"industries": ["Software & Internet"]},
+            status=Task.Status.RUNNING,
+        )
+
+        scraped_leads = [
+            {
+                "first_name": "Ahmed",
+                "last_name": "Mahmoud",
+                "job_title": "Founder",
+                "company_name": "DXwand",
+                "company_domain": "dxwand.com",
+                "location": "Dubai",
+                "industry": "$10 - 50M",  # Adapt revenue wrongly picked previously
+                "linkedin_profile_url": "https://linkedin.com/in/ahmed",
+            }
+        ]
+
+        from unittest.mock import patch
+        with patch("tasks.services.supabase_storage.upload_file", return_value=""):
+            _process_scraping_results(task, scraped_leads, verify_emails=False)
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
+        self.assertEqual(task.verified_leads[0]["industry"], "Software & Internet")
+
+        csv_file = Path(task.result_path)
+        self.assertTrue(csv_file.exists())
+        with csv_file.open("r", encoding="utf-8") as f:
+            reader = list(csv.DictReader(f))
+            self.assertEqual(len(reader), 1)
+            self.assertEqual(reader[0]["Industry"], "Software & Internet")
+            self.assertNotEqual(reader[0]["Industry"], "$10 - 50M")
+
+
+class AuthenticationAPITests(APITestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="authuser",
+            email="authuser@example.com",
+            password="CorrectPassword123!",
+        )
+
+    def test_unauthenticated_request_to_protected_endpoint_rejected(self):
+        res = self.client.get("/api/tasks/")
+        self.assertEqual(res.status_code, 401)
+
+    def test_login_success(self):
+        res = self.client.post(
+            "/api/auth/login/",
+            {"email": "authuser@example.com", "password": "CorrectPassword123!"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("token", res.data)
+        self.assertEqual(res.data["username"], "authuser")
+        self.assertEqual(res.data["email"], "authuser@example.com")
+
+    def test_login_invalid_credentials(self):
+        res = self.client.post(
+            "/api/auth/login/",
+            {"email": "authuser@example.com", "password": "WrongPassword"},
+        )
+        self.assertEqual(res.status_code, 401)
+
+    def test_user_me_endpoint_with_token(self):
+        from rest_framework.authtoken.models import Token
+        token, _ = Token.objects.get_or_create(user=self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        res = self.client.get("/api/auth/me/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["username"], "authuser")
+
 
 

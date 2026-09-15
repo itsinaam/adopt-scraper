@@ -80,8 +80,10 @@ INSTALLED_APPS = [
     # Third-party apps
     "corsheaders",
     "rest_framework",
+    "rest_framework.authtoken",
     "drf_spectacular",
     # Local apps
+    "api",
     "tasks",
 ]
 
@@ -199,9 +201,11 @@ STORAGES = {
 
 # REST Framework & Swagger OpenAPI Configuration
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "api.authentication.FlexibleTokenAuthentication",
+    ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.AllowAny",
+        "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }

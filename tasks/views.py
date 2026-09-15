@@ -48,7 +48,11 @@ class CurrentTaskView(APIView):
         tags=["Tasks"],
     )
     def get(self, request):
-        running_tasks = list(Task.objects.filter(status=Task.Status.RUNNING).order_by("-created_at"))
+        queryset = Task.objects.filter(status=Task.Status.RUNNING)
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+
+        running_tasks = list(queryset.order_by("-created_at", "-id"))
 
         return Response({
             "running_count": len(running_tasks),
@@ -60,11 +64,12 @@ class CurrentTaskView(APIView):
 class TaskListView(APIView):
     """
     Retrieves tasks. By default filters to ONLY RUNNING tasks. Use ?status=all for all tasks, or ?status=failed, ?status=completed.
+    Regular users only see their own tasks; superusers can view all tasks or filter by ?user_id=.
     """
 
     @extend_schema(
         summary="List Scraping Tasks",
-        description="Returns tasks list. By default only returns RUNNING tasks. Pass ?status=all to include FAILED/COMPLETED, or ?status=failed.",
+        description="Returns tasks list scoped to the authenticated user. By default only returns RUNNING tasks. Pass ?status=all to include FAILED/COMPLETED, or ?status=failed.",
         responses={
             200: OpenApiResponse(
                 description="List of tasks",
@@ -82,7 +87,14 @@ class TaskListView(APIView):
     )
     def get(self, request):
         status_param = request.query_params.get("status")
-        queryset = Task.objects.all().order_by("-created_at")
+        queryset = Task.objects.all().order_by("-created_at", "-id")
+
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+        elif request.user and request.user.is_authenticated and request.user.is_superuser:
+            user_id_param = request.query_params.get("user_id")
+            if user_id_param and user_id_param.isdigit():
+                queryset = queryset.filter(user_id=int(user_id_param))
 
         if status_param:
             if status_param.lower() != "all":
@@ -97,7 +109,10 @@ class TaskListView(APIView):
         else:
             tasks = list(queryset[:50])
 
-        running_count = Task.objects.filter(status=Task.Status.RUNNING).count()
+        running_qs = Task.objects.filter(status=Task.Status.RUNNING)
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            running_qs = running_qs.filter(user=request.user)
+        running_count = running_qs.count()
 
         return Response({
             "running_count": running_count,
@@ -134,8 +149,12 @@ class CompletedTasksView(APIView):
         tags=["Tasks"],
     )
     def get(self, request, task_id: int = None):
+        base_qs = Task.objects.filter(status=Task.Status.COMPLETED)
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            base_qs = base_qs.filter(user=request.user)
+
         if task_id is not None:
-            task = Task.objects.filter(pk=task_id, status=Task.Status.COMPLETED).first()
+            task = base_qs.filter(pk=task_id).first()
             if not task:
                 return Response(
                     {"detail": "Completed task not found."},
@@ -144,7 +163,7 @@ class CompletedTasksView(APIView):
             serializer = CompletedTaskSerializer(task, context={"request": request})
             return Response({"task": serializer.data}, status=status.HTTP_200_OK)
 
-        queryset = Task.objects.filter(status=Task.Status.COMPLETED).order_by("-completed_at", "-created_at")
+        queryset = base_qs.order_by("-completed_at", "-created_at")
 
         limit = request.query_params.get("limit")
         if limit and limit.isdigit():
@@ -179,7 +198,11 @@ class TaskResultsView(APIView):
         tags=["Tasks"],
     )
     def get(self, request, task_id: int):
-        task = Task.objects.filter(pk=task_id).first()
+        queryset = Task.objects.all()
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+
+        task = queryset.filter(pk=task_id).first()
         if task is None:
             return Response(
                 {"detail": "Task not found."},
@@ -200,6 +223,7 @@ class TaskResultsView(APIView):
         download_link = task.result_url or f"/api/tasks/{task.pk}/download/"
         data = {
             "task_id": task.pk,
+            "task_name": task.task_name,
             "status": task.status,
             "account_email": task.account_email,
             "filters": task.filters,
@@ -231,7 +255,11 @@ class DownloadTaskView(APIView):
         tags=["Tasks"],
     )
     def get(self, request, task_id: int):
-        task = Task.objects.filter(pk=task_id).first()
+        queryset = Task.objects.all()
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+
+        task = queryset.filter(pk=task_id).first()
         if task is None:
             return Response(
                 {"detail": "Task not found."},
@@ -282,10 +310,11 @@ class StartTaskView(APIView):
         request=StartTaskRequestSerializer,
         examples=[
             OpenApiExample(
-                "Filters Only Example (Environment Credentials)",
-                summary="Lead Scraping with Only Filters",
-                description="Starts scraping using credentials (ADAPT_EMAIL and ADAPT_PASSWORD) configured in environment (.env).",
+                "Standard Search Example with Task Name",
+                summary="Lead Scraping with Task Name & Filters",
+                description="Starts scraping with custom task_name and filter constraints.",
                 value={
+                    "task_name": "Tech Executives US & UK",
                     "filters": {
                         "job_titles": ["CEO", "Founder", "Managing Director"],
                         "industries": ["Information Technology and Services", "Computer Software"],
@@ -296,10 +325,11 @@ class StartTaskView(APIView):
                 request_only=True,
             ),
             OpenApiExample(
-                "Standard Search Example",
-                summary="Lead Scraping with Filters & Explicit Credentials",
-                description="Example payload with explicit email and password.",
+                "Explicit Credentials Example",
+                summary="Lead Scraping with Explicit Credentials",
+                description="Example payload with custom task_name, explicit email and password.",
                 value={
+                    "task_name": "Finance Leaders Campaign",
                     "email": "umer@techfy.io",
                     "password": "your_adapt_password",
                     "filters": {
@@ -314,8 +344,9 @@ class StartTaskView(APIView):
             OpenApiExample(
                 "Minimal Search Example",
                 summary="Minimal Search without Filters",
-                description="Starts scraping without any filter constraints.",
+                description="Starts scraping with task_name without filter constraints.",
                 value={
+                    "task_name": "Minimal Scraping Run",
                     "filters": {},
                 },
                 request_only=True,
@@ -340,9 +371,12 @@ class StartTaskView(APIView):
         account_email = serializer.validated_data["account_email"]
         password = serializer.validated_data["password"]
         filters = serializer.validated_data.get("filters", {})
+        task_name = serializer.validated_data.get("task_name", "")
 
         now = timezone.now()
         task = Task.objects.create(
+            user=request.user if request.user and request.user.is_authenticated else None,
+            task_name=task_name,
             account_email=account_email,
             filters=filters,
             status=Task.Status.RUNNING,
@@ -352,7 +386,7 @@ class StartTaskView(APIView):
             logs=[
                 {
                     "timestamp": now.isoformat(),
-                    "message": "Scraping task initialized and queued.",
+                    "message": f"Scraping task '{task_name or account_email}' initialized and queued.",
                     "step": "STARTING",
                 }
             ],
@@ -392,10 +426,14 @@ class StopTaskView(APIView):
         tags=["Tasks"],
     )
     def post(self, request, task_id: int = None):
+        queryset = Task.objects.filter(status=Task.Status.RUNNING)
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+
         if task_id is not None:
-            task = Task.objects.filter(pk=task_id, status=Task.Status.RUNNING).first()
+            task = queryset.filter(pk=task_id).first()
         else:
-            task = Task.objects.filter(status=Task.Status.RUNNING).first()
+            task = queryset.first()
 
         if task is None:
             return Response(
@@ -425,6 +463,52 @@ class StopTaskView(APIView):
             {
                 "detail": f"Task {task.pk} has been stopped.",
                 "task": TaskSerializer(task).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class DeleteTaskView(APIView):
+    """
+    Deletes a scraping task by ID.
+    Regular users can only delete their own tasks; superusers can delete any task.
+    """
+
+    @extend_schema(
+        summary="Delete Scraping Task",
+        description="Permanently deletes a scraping task by ID. Regular users can only delete their own tasks.",
+        responses={
+            200: OpenApiResponse(
+                description="Task deleted successfully",
+                response=inline_serializer(
+                    name="DeleteTaskResponse",
+                    fields={
+                        "detail": serializers.CharField(),
+                        "task_id": serializers.IntegerField(),
+                    },
+                ),
+            ),
+            404: OpenApiResponse(description="Task not found or not owned by user"),
+        },
+        tags=["Tasks"],
+    )
+    def delete(self, request, task_id: int):
+        queryset = Task.objects.all()
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+
+        task = queryset.filter(pk=task_id).first()
+        if task is None:
+            return Response(
+                {"detail": "Task not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        task.delete()
+        return Response(
+            {
+                "detail": f"Task {task_id} has been deleted successfully.",
+                "task_id": task_id,
             },
             status=status.HTTP_200_OK,
         )

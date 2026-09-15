@@ -154,10 +154,20 @@ def run_task(task_id: int, password: str):
             ]
 
         task_industries = (task.filters or {}).get("industries", [])
-        default_industry = task_industries[0] if isinstance(task_industries, list) and task_industries else ""
+        if isinstance(task_industries, list) and task_industries:
+            payload_industry = ", ".join(str(item).strip() for item in task_industries if str(item).strip())
+        elif isinstance(task_industries, str) and task_industries.strip():
+            payload_industry = task_industries.strip()
+        else:
+            payload_industry = ""
+
         for r in rows:
-            if not r.get("industry") and default_industry:
-                r["industry"] = default_industry
+            if payload_industry:
+                r["industry"] = payload_industry
+            else:
+                curr_ind = (r.get("industry") or "").strip()
+                if curr_ind.startswith("$") or ((" - " in curr_ind or "M" in curr_ind) and any(c.isdigit() for c in curr_ind)):
+                    r["industry"] = ""
 
         result_directory = Path(settings.BASE_DIR) / "results"
         result_directory.mkdir(exist_ok=True)
@@ -179,6 +189,9 @@ def run_task(task_id: int, password: str):
             writer = csv.DictWriter(result_file, fieldnames=fieldnames)
             writer.writeheader()
             for row in rows:
+                ind_val = payload_industry or row.get("industry", "")
+                if ind_val.startswith("$"):
+                    ind_val = ""
                 writer.writerow(
                     {
                         "First Name": row.get("first_name", ""),
@@ -187,7 +200,7 @@ def run_task(task_id: int, password: str):
                         "Title": row.get("job_title", "") or row.get("title", ""),
                         "Company": row.get("company_name", "") or row.get("company", ""),
                         "Location": row.get("location", ""),
-                        "Industry": row.get("industry", "") or default_industry,
+                        "Industry": ind_val,
                         "LInkedin": row.get("linkedin_profile_url", "") or row.get("linkedin", ""),
                         "Website": row.get("company_domain", "") or row.get("website", ""),
                     }

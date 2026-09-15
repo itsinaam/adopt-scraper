@@ -60,6 +60,18 @@ class TaskSerializer(serializers.ModelSerializer):
     """
     Serializer for Task instances, handling execution creation, progress tracking, and lead results.
     """
+    task_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=255,
+        help_text="Custom name or label for the scraping task.",
+    )
+    user = serializers.ReadOnlyField(
+        source="user.username",
+        default=None,
+        help_text="Username of task owner.",
+    )
     account_email = serializers.EmailField(
         required=False,
         help_text="Adapt.io account email for running the task.",
@@ -82,6 +94,8 @@ class TaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             "id",
+            "task_name",
+            "user",
             "account_email",
             "email",
             "password",
@@ -231,6 +245,13 @@ class StartTaskRequestSerializer(serializers.Serializer):
     """
     Request payload schema for starting a new scraping task.
     """
+    task_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=255,
+        help_text="Custom name or label for the scraping task",
+    )
     email = serializers.EmailField(
         required=False,
         help_text="Adapt.io account email (optional if ADAPT_EMAIL is configured in .env)",
@@ -259,7 +280,7 @@ class TaskLogsResponseSerializer(serializers.Serializer):
     current_step = serializers.CharField(help_text="Current execution step")
     progress = serializers.IntegerField(help_text="Progress percentage 0-100")
     message = serializers.CharField(help_text="Latest task status message")
-    logs = TaskLogItemSerializer(many=True, help_text="Chronological list of task log entries")
+    logs = TaskLogItemSerializer(many=True, help_text="Chronological list of task log events")
 
 
 class TaskResultsResponseSerializer(serializers.Serializer):
@@ -267,6 +288,7 @@ class TaskResultsResponseSerializer(serializers.Serializer):
     Structured results response designed for Frontend UI dashboards.
     """
     task_id = serializers.IntegerField()
+    task_name = serializers.CharField(required=False, default="", allow_blank=True)
     status = serializers.CharField()
     account_email = serializers.EmailField()
     filters = serializers.DictField()
@@ -285,6 +307,8 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
     Returns only essential metadata and file download URL without heavy lead arrays.
     """
     task_id = serializers.IntegerField(source="id", read_only=True)
+    task_name = serializers.CharField(read_only=True)
+    user = serializers.ReadOnlyField(source="user.username", default=None)
     filters = serializers.SerializerMethodField(help_text="Search filters applied for scraping")
     total_leads_scraped = serializers.IntegerField(source="total_scraped_leads", read_only=True)
     total_combinations = serializers.IntegerField(source="total_candidates_generated", read_only=True)
@@ -297,6 +321,8 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             "task_id",
+            "task_name",
+            "user",
             "filters",
             "total_leads_scraped",
             "total_combinations",
