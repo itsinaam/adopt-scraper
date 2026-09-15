@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 
 from .models import Task
 from .serializers import (
+    CompletedTaskSerializer,
     StartTaskRequestSerializer,
     TaskResultsResponseSerializer,
     TaskSerializer,
@@ -103,6 +104,59 @@ class TaskListView(APIView):
             "total": len(tasks),
             "tasks": TaskSerializer(tasks, many=True).data,
         })
+
+
+class CompletedTasksView(APIView):
+    """
+    Retrieves all successfully completed scraping tasks with download URLs and key metrics.
+    """
+
+    @extend_schema(
+        summary="List Completed Scraping Tasks",
+        description=(
+            "Returns a lightweight list of all completed tasks with filters, "
+            "scraped leads count, permutation combinations, start/completion times, "
+            "and direct file download URLs."
+        ),
+        responses={
+            200: OpenApiResponse(
+                description="List of completed tasks",
+                response=inline_serializer(
+                    name="CompletedTasksResponse",
+                    fields={
+                        "total": serializers.IntegerField(),
+                        "tasks": CompletedTaskSerializer(many=True),
+                    },
+                ),
+            ),
+            404: OpenApiResponse(description="Completed task not found"),
+        },
+        tags=["Tasks"],
+    )
+    def get(self, request, task_id: int = None):
+        if task_id is not None:
+            task = Task.objects.filter(pk=task_id, status=Task.Status.COMPLETED).first()
+            if not task:
+                return Response(
+                    {"detail": "Completed task not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            serializer = CompletedTaskSerializer(task, context={"request": request})
+            return Response({"task": serializer.data}, status=status.HTTP_200_OK)
+
+        queryset = Task.objects.filter(status=Task.Status.COMPLETED).order_by("-completed_at", "-created_at")
+
+        limit = request.query_params.get("limit")
+        if limit and limit.isdigit():
+            tasks = list(queryset[:int(limit)])
+        else:
+            tasks = list(queryset[:100])
+
+        serializer = CompletedTaskSerializer(tasks, many=True, context={"request": request})
+        return Response({
+            "total": len(tasks),
+            "tasks": serializer.data,
+        }, status=status.HTTP_200_OK)
 
 
 class TaskResultsView(APIView):

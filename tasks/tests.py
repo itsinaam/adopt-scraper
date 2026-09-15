@@ -320,3 +320,60 @@ class TaskAPITests(APITestCase):
             self.assertEqual(response.data["task"]["account_email"], "new_task@example.com")
             self.assertTrue(mock_start.called)
 
+    def test_completed_tasks_list_endpoint(self):
+        from django.utils import timezone
+        now = timezone.now()
+        t_completed = Task.objects.create(
+            account_email="done@example.com",
+            status=Task.Status.COMPLETED,
+            filters={"job_titles": ["CEO"], "locations": {"city": ["Dubai"]}},
+            total_scraped_leads=500,
+            total_candidates_generated=4000,
+            total_verified_emails=120,
+            started_at=now,
+            completed_at=now,
+            result_url="https://example.com/results.csv",
+        )
+        t_running = Task.objects.create(
+            account_email="active@example.com",
+            status=Task.Status.RUNNING,
+        )
+
+        response = self.client.get("/api/tasks/completed/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["total"], 1)
+        item = response.data["tasks"][0]
+        self.assertEqual(item["task_id"], t_completed.pk)
+        self.assertEqual(item["total_leads_scraped"], 500)
+        self.assertEqual(item["total_combinations"], 4000)
+        self.assertEqual(item["total_verified_emails"], 120)
+        self.assertEqual(item["url_of_file"], "https://example.com/results.csv")
+        self.assertEqual(item["filters"]["job_titles"], ["CEO"])
+        self.assertIn("task_started_at", item)
+        self.assertIn("task_completed_at", item)
+
+    def test_completed_task_by_id_endpoint(self):
+        from django.utils import timezone
+        now = timezone.now()
+        task = Task.objects.create(
+            account_email="single@example.com",
+            status=Task.Status.COMPLETED,
+            filters={"industries": ["Software"]},
+            total_scraped_leads=100,
+            total_candidates_generated=800,
+            started_at=now,
+            completed_at=now,
+            result_url="https://example.com/single.csv",
+        )
+        res = self.client.get(f"/api/tasks/{task.pk}/completed/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["task"]["task_id"], task.pk)
+        self.assertEqual(res.data["task"]["total_leads_scraped"], 100)
+        self.assertEqual(res.data["task"]["total_combinations"], 800)
+        self.assertEqual(res.data["task"]["url_of_file"], "https://example.com/single.csv")
+
+        # 404 for non-existent
+        res_404 = self.client.get("/api/tasks/99999/completed/")
+        self.assertEqual(res_404.status_code, 404)
+
+

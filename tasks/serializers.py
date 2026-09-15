@@ -1,3 +1,4 @@
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .constants import EMPLOYEE_COUNT_OPTIONS, FILTER_FIELDS
@@ -276,3 +277,63 @@ class TaskResultsResponseSerializer(serializers.Serializer):
     completed_at = serializers.DateTimeField(allow_null=True)
     logs = TaskLogItemSerializer(many=True, default=list, help_text="Chronological task log events")
     verified_leads = LeadContactSerializer(many=True, help_text="List of all verified leads")
+
+
+class CompletedTaskSerializer(serializers.ModelSerializer):
+    """
+    Lightweight listing serializer for completed scraping tasks.
+    Returns only essential metadata and file download URL without heavy lead arrays.
+    """
+    task_id = serializers.IntegerField(source="id", read_only=True)
+    filters = serializers.SerializerMethodField(help_text="Search filters applied for scraping")
+    total_leads_scraped = serializers.IntegerField(source="total_scraped_leads", read_only=True)
+    total_combinations = serializers.IntegerField(source="total_candidates_generated", read_only=True)
+    total_verified_emails = serializers.IntegerField(read_only=True)
+    task_started_at = serializers.DateTimeField(source="started_at", read_only=True)
+    task_completed_at = serializers.DateTimeField(source="completed_at", read_only=True)
+    url_of_file = serializers.SerializerMethodField(help_text="Direct or signed download URL for the CSV file")
+
+    class Meta:
+        model = Task
+        fields = [
+            "task_id",
+            "filters",
+            "total_leads_scraped",
+            "total_combinations",
+            "total_verified_emails",
+            "task_started_at",
+            "task_completed_at",
+            "url_of_file",
+        ]
+
+    @extend_schema_field(serializers.DictField)
+    def get_filters(self, obj: Task):
+        import json
+        if isinstance(obj.filters, dict):
+            return obj.filters
+        if isinstance(obj.filters, str):
+            try:
+                return json.loads(obj.filters)
+            except Exception:
+                return obj.filters
+        return {}
+
+    @extend_schema_field(serializers.CharField)
+    def get_url_of_file(self, obj: Task) -> str:
+        from .storage import supabase_storage
+        if obj.result_path and obj.result_path.startswith("tasks/"):
+            try:
+                signed = supabase_storage.create_signed_url(obj.result_path, expires_in=7 * 24 * 3600)
+                if signed:
+                    return signed
+            except Exception:
+                pass
+
+        if obj.result_url:
+            return obj.result_url
+
+        request = self.context.get("request")
+        path = f"/api/tasks/{obj.pk}/download/"
+        if request:
+            return request.build_absolute_uri(path)
+        return path
