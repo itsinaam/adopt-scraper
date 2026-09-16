@@ -66,21 +66,23 @@ def open_prospect_search(page: Page) -> None:
 
         if "advanced-search" not in page.url.lower():
             try:
-                page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="domcontentloaded", timeout=20_000)
+                page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="domcontentloaded", timeout=30_000)
             except Exception:
-                page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="commit", timeout=15_000)
+                page.goto("https://leads.adapt.io/advanced-search/contact#search", wait_until="commit", timeout=20_000)
 
     # Dismiss any welcome/tour modals if present
     _dismiss_popups(page)
 
     # Wait for the search interface and criteria sidebar to be ready
     try:
-        page.wait_for_selector('text="Contact Criteria"', timeout=15_000)
+        page.wait_for_selector('text="Contact Criteria"', timeout=30_000)
     except Exception:
         try:
-            page.wait_for_selector('text="Job Title"', timeout=10_000)
+            page.wait_for_selector('text="Job Title"', timeout=20_000)
         except Exception:
-            page.wait_for_timeout(2000)
+            if "login" in page.url.lower():
+                raise TimeoutError("Adapt.io session expired while opening Prospect Search")
+            page.wait_for_timeout(5000)
 
 
 def _click_first_visible(locators, page: Page, timeout_seconds: int) -> bool:
@@ -94,8 +96,11 @@ def _click_first_visible(locators, page: Page, timeout_seconds: int) -> bool:
                         candidate.scroll_into_view_if_needed(timeout=1000)
                     except Exception:
                         pass
-                    candidate.click()
-                    return True
+                    try:
+                        candidate.click(timeout=2000)
+                        return True
+                    except Exception:
+                        continue
 
         page.wait_for_timeout(250)
 
@@ -108,9 +113,11 @@ def open_filter(
 ) -> None:
     _dismiss_popups(page)
 
-    filter_target = page.get_by_text(filter_name, exact=True)
+    filter_target = page.get_by_text(
+        re.compile(rf"^\s*{re.escape(filter_name)}\s*$", re.IGNORECASE)
+    )
     
-    # 1. Give sufficient time for the UI to be ready (10 seconds instead of 3)
+    # Wait for the filter itself before expanding its criteria section.
     if _click_first_visible((filter_target,), page, timeout_seconds=10):
         return
 
@@ -130,7 +137,7 @@ def open_filter(
     if not _click_first_visible(
         (filter_target,),
         page,
-        timeout_seconds=30,
+        timeout_seconds=45,
     ):
         raise TimeoutError(f"{filter_name} filter did not appear")
 

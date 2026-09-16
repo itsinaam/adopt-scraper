@@ -2,7 +2,8 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .constants import EMPLOYEE_COUNT_OPTIONS, FILTER_FIELDS
-from .models import Task
+from .models import CSVProcessTask, Task
+
 
 
 class TaskFiltersSerializer(serializers.Serializer):
@@ -363,3 +364,66 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(path)
         return path
+
+
+class CSVProcessTaskUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(
+        help_text="Uploaded CSV file containing prospect leads to clean and process",
+    )
+    task_name = serializers.CharField(
+        required=False,
+        default="",
+        allow_blank=True,
+        help_text="Optional custom label or name for this CSV processing task",
+    )
+
+    def validate_file(self, value):
+        if not value.name.lower().endswith(".csv"):
+            raise serializers.ValidationError("Only .csv files are supported.")
+        if value.size > 25 * 1024 * 1024:
+            raise serializers.ValidationError("File size must not exceed 25MB.")
+        return value
+
+
+class CSVProcessTaskSerializer(serializers.ModelSerializer):
+    task_id = serializers.IntegerField(source="id", read_only=True)
+    user = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CSVProcessTask
+        fields = [
+            "task_id",
+            "task_name",
+            "file_name",
+            "user",
+            "status",
+            "total_rows",
+            "valid_emails_count",
+            "personal_emails_removed_count",
+            "missing_emails_count",
+            "combinations_generated_count",
+            "duplicates_removed_count",
+            "download_url",
+            "started_at",
+            "completed_at",
+
+        ]
+
+    @extend_schema_field(serializers.DictField(allow_null=True))
+    def get_user(self, obj: CSVProcessTask):
+        if obj.user:
+            return {
+                "id": obj.user.pk,
+                "username": obj.user.username,
+                "email": obj.user.email,
+            }
+        return None
+
+    @extend_schema_field(serializers.CharField)
+    def get_download_url(self, obj: CSVProcessTask) -> str:
+        request = self.context.get("request")
+        url = obj.result_url or f"/api/tasks/csv-tasks/{obj.pk}/download/"
+        if request and url.startswith("/"):
+            return request.build_absolute_uri(url)
+        return url
