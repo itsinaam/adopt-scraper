@@ -97,7 +97,7 @@ def is_authenticated(page) -> bool:
         if "login" in final_url:
             return False
 
-        return final_url.startswith("https://leads.adapt.io")
+        return False
     except Exception as exc:
         logger.warning("Session authentication check encountered error: %s", exc)
         return False

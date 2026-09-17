@@ -113,29 +113,55 @@ def open_filter(
 ) -> None:
     _dismiss_popups(page)
 
-    filter_target = page.get_by_text(
-        re.compile(rf"^\s*{re.escape(filter_name)}\s*$", re.IGNORECASE)
+    filter_pattern = re.compile(
+        rf"^\s*{re.escape(filter_name)}\s*$",
+        re.IGNORECASE,
     )
-    
+    filter_target = (
+        page.get_by_text(filter_pattern),
+        page.get_by_role("button", name=filter_pattern),
+        page.locator(
+            f"xpath=//*[normalize-space(text())={filter_name!r}]"
+        ),
+    )
+
     # Wait for the filter itself before expanding its criteria section.
-    if _click_first_visible((filter_target,), page, timeout_seconds=10):
+    if _click_first_visible(filter_target, page, timeout_seconds=10):
         return
 
     # 2. If not visible, expand the correct parent criteria section
     if filter_name in CONTACT_CRITERIA_FILTERS:
-        contact_criteria = page.get_by_text(re.compile(r"^Contact\s+Criteria$", re.IGNORECASE))
-        if contact_criteria.count() > 0 and contact_criteria.first.is_visible():
-            contact_criteria.first.click()
+        contact_criteria_pattern = re.compile(
+            r"^\s*Contact\s+Criteria\s*$",
+            re.IGNORECASE,
+        )
+        contact_criteria = (
+            page.get_by_text(contact_criteria_pattern),
+            page.get_by_role("button", name=contact_criteria_pattern),
+            page.locator(
+                "xpath=//*[normalize-space(text())='Contact Criteria']"
+            ),
+        )
+        if _click_first_visible(contact_criteria, page, timeout_seconds=10):
             page.wait_for_timeout(500)
     elif filter_name in COMPANY_CRITERIA_FILTERS:
-        company_criteria = page.get_by_text(re.compile(r"^Company\s+Criteria$", re.IGNORECASE))
-        if company_criteria.count() > 0 and company_criteria.first.is_visible():
-            company_criteria.first.click()
+        company_criteria_pattern = re.compile(
+            r"^\s*Company\s+Criteria\s*$",
+            re.IGNORECASE,
+        )
+        company_criteria = (
+            page.get_by_text(company_criteria_pattern),
+            page.get_by_role("button", name=company_criteria_pattern),
+            page.locator(
+                "xpath=//*[normalize-space(text())='Company Criteria']"
+            ),
+        )
+        if _click_first_visible(company_criteria, page, timeout_seconds=10):
             page.wait_for_timeout(500)
 
     # 3. Final attempt to find and click the filter target
     if not _click_first_visible(
-        (filter_target,),
+        filter_target,
         page,
         timeout_seconds=45,
     ):
