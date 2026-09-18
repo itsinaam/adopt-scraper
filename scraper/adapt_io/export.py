@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import re
 
-from playwright.sync_api import Page
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -313,19 +313,28 @@ def _refresh_stale_pagination(page: Page, visible_count: int) -> None:
     if visible_count < 50:
         return
 
-    page.wait_for_function(
-        """(visibleCount) => {
-            const element = document.querySelector('.pagination .text');
-            if (!element) return false;
-            const match = element.innerText.match(/Pages\\s+(\\d+)\\s+of\\s+(\\d+)/i);
-            if (!match) return false;
-            const summary = document.body.innerText.match(/([\\d,]+)\\s+contacts\\s+from/i);
-            const totalContacts = summary ? Number(summary[1].replace(/,/g, "")) : 0;
-            return Number(match[2]) > 1 || totalContacts <= visibleCount;
-        }""",
-        arg=visible_count,
-        timeout=10_000,
-    )
+    try:
+        page.wait_for_function(
+            """(visibleCount) => {
+                const contacts = document.querySelectorAll('a[href*="linkedin.com/in/"]').length;
+                if (contacts >= visibleCount) return true;
+
+                const element = document.querySelector('.pagination .text');
+                if (!element) return false;
+                const match = element.innerText.match(/Pages\s+(\d+)\s+of\s+(\d+)/i);
+                if (!match) return false;
+                const summary = document.body.innerText.match(/([\d,]+)\s+contacts\s+from/i);
+                const totalContacts = summary ? Number(summary[1].replace(/,/g, "")) : 0;
+                return Number(match[2]) > 1 || totalContacts <= visibleCount;
+            }""",
+            arg=visible_count,
+            timeout=10_000,
+        )
+    except PlaywrightTimeoutError:
+        logger.warning(
+            "Pagination metadata did not refresh; continuing with %s rendered contacts.",
+            visible_count,
+        )
 
 
 def _set_rows_per_page(page: Page, count: str = "100", log_callback=None) -> bool:
