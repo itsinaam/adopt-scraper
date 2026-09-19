@@ -37,6 +37,7 @@ class BrowserManager:
         )
 
         context_options = {
+            "ignore_https_errors": True,
             "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -57,7 +58,7 @@ class BrowserManager:
         server = os.getenv("WEBSHARE_PROXY_SERVER")
         username = os.getenv("WEBSHARE_PROXY_USERNAME")
         password = os.getenv("WEBSHARE_PROXY_PASSWORD")
-        bypass = os.getenv("WEBSHARE_PROXY_BYPASS", "www.adapt.io,*.adapt.io")
+        bypass = os.getenv("WEBSHARE_PROXY_BYPASS", "").strip()
 
         if not server:
             return None

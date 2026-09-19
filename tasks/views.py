@@ -406,6 +406,79 @@ class StartTaskView(APIView):
         )
 
 
+class RetryTaskView(APIView):
+    """Retries a failed scraping task using its saved filters and account."""
+
+    @extend_schema(
+        summary="Retry Failed Scraping Task",
+        description=(
+            "Restarts a FAILED task with the same account and filters. "
+            "Provide password in the request only when ADAPT_PASSWORD is not configured."
+        ),
+        request=inline_serializer(
+            name="RetryTaskRequest",
+            fields={
+                "password": serializers.CharField(required=False, write_only=True),
+            },
+        ),
+        responses={
+            202: OpenApiResponse(description="Task retry accepted"),
+            400: OpenApiResponse(description="Task is not failed or password is missing"),
+            404: OpenApiResponse(description="Task not found"),
+        },
+        tags=["Tasks"],
+    )
+    def post(self, request, task_id: int):
+        queryset = Task.objects.all()
+        if request.user and request.user.is_authenticated and not request.user.is_superuser:
+            queryset = queryset.filter(user=request.user)
+
+        task = queryset.filter(pk=task_id).first()
+        if task is None:
+            return Response(
+                {"detail": "Task not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if task.status != Task.Status.FAILED:
+            return Response(
+                {"detail": "Only FAILED tasks can be retried.", "status": task.status},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        import os
+        password = request.data.get("password") or os.getenv("ADAPT_PASSWORD", "").strip()
+        if not password:
+            return Response(
+                {"detail": "Password is required in the request or ADAPT_PASSWORD environment variable."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        task.status = Task.Status.RUNNING
+        task.current_step = "STARTING"
+        task.progress = 0
+        task.message = "Task retry is starting..."
+        task.error = ""
+        task.completed_at = None
+        task.total_scraped_leads = 0
+        task.total_candidates_generated = 0
+        task.total_verified_emails = 0
+        task.verified_leads = []
+        task.result_path = ""
+        task.result_url = ""
+        task.started_at = now
+        task.add_log("Failed task retry initialized and queued.", step="RETRYING")
+        task.save()
+
+        start_task(task.id, password)
+
+        return Response(
+            {"detail": f"Task {task.id} retry started.", "task": TaskSerializer(task).data},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
 class StopTaskView(APIView):
     """
     Stops the currently running scraping task or a specific task by ID.

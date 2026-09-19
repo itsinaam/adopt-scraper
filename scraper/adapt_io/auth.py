@@ -5,7 +5,7 @@ from scraper.browser import BrowserManager
 
 logger = logging.getLogger(__name__)
 
-LOGIN_URL = "https://www.adapt.io/login.htm"
+LOGIN_URL = "https://www.adapt.io/login.htm?slc=web&login=tru"
 LEADS_URL = "https://leads.adapt.io/"
 
 

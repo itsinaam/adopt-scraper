@@ -1,0 +1,16 @@
+  
+  # Zunaira
+    {
+        "email": "user1@adapt.io",
+        "password": "User1Secure2026!"
+       }
+
+
+# khadija
+
+    {
+       
+        "email": "user2@adapt.io",
+        "password": "User2Secure2026!"
+     
+    }

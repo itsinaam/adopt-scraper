@@ -189,6 +189,61 @@ class TaskAPITests(APITestCase):
         self.assertEqual(res_running.status_code, 200)
         self.assertEqual(len(res_running.data.get("tasks")), 0)
 
+    def test_failed_task_can_be_retried(self):
+        from unittest.mock import patch
+
+        task = Task.objects.create(
+            user=self.user,
+            account_email="retry@example.com",
+            filters={"job_titles": ["CEO"]},
+            status=Task.Status.FAILED,
+            error="Temporary timeout",
+            progress=45,
+        )
+        with patch("tasks.views.start_task") as mock_start:
+            response = self.client.post(
+                f"/api/tasks/{task.id}/retry/",
+                {"password": "secret"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        mock_start.assert_called_once_with(task.id, "secret")
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.RUNNING)
+        self.assertEqual(task.progress, 0)
+        self.assertEqual(task.error, "")
+        self.assertEqual(task.filters, {"job_titles": ["CEO"]})
+
+    def test_retry_requires_failed_task(self):
+        from unittest.mock import patch
+
+        task = Task.objects.create(
+            user=self.user,
+            account_email="running@example.com",
+            status=Task.Status.RUNNING,
+        )
+        with patch("tasks.views.start_task") as mock_start:
+            response = self.client.post(f"/api/tasks/{task.id}/retry/", {}, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        mock_start.assert_not_called()
+
+    def test_retry_uses_environment_password(self):
+        import os
+        from unittest.mock import patch
+
+        task = Task.objects.create(
+            user=self.user,
+            account_email="retry@example.com",
+            status=Task.Status.FAILED,
+        )
+        with patch.dict(os.environ, {"ADAPT_PASSWORD": "env-secret"}), patch("tasks.views.start_task") as mock_start:
+            response = self.client.post(f"/api/tasks/{task.id}/retry/", {}, format="json")
+
+        self.assertEqual(response.status_code, 202)
+        mock_start.assert_called_once_with(task.id, "env-secret")
+
     def test_running_task_cannot_be_downloaded(self):
         task = Task.objects.create(
             account_email="demo@example.com",
