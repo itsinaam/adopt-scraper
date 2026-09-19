@@ -52,6 +52,29 @@ def _save_session_state(state: dict, email: str | None = None) -> None:
             logger.warning("Could not save session state to %s: %s", path, e)
 
 
+def _delete_session_state(email: str | None = None) -> None:
+    paths = {_get_session_file_path(email), _get_session_file_path(None)}
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+                logger.info("Deleted invalid Adapt.io session state from %s", path)
+        except Exception as e:
+            logger.warning("Could not delete Adapt.io session state from %s: %s", path, e)
+
+
+def _should_clear_session(exc: Exception) -> bool:
+    error_text = str(exc).lower()
+    return any(
+        marker in error_text
+        for marker in (
+            "targetclosederror",
+            "target page, context or browser has been closed",
+            "err_tunnel_connection_failed",
+        )
+    )
+
+
 def authenticate_with_playwright(
     email: str,
     password: str | None,
@@ -174,5 +197,13 @@ def scrape_with_playwright(
         except PlaywrightTimeoutError as exc:
             raise TimeoutError("Reading search results timed out") from exc
 
+    except Exception as exc:
+        if _should_clear_session(exc):
+            emit_log(
+                "Adapt.io browser/proxy session failed. Clearing saved session for the next attempt...",
+                step="SESSION_RESET",
+            )
+            _delete_session_state(email)
+        raise
     finally:
         manager.close()

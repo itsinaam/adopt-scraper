@@ -220,6 +220,58 @@ def _first_visible_locator(
     raise TimeoutError(f"{description} did not appear")
 
 
+def _submit_search(page: Page) -> None:
+    candidates = (
+        page.get_by_role(
+            "button",
+            name=re.compile(r"see\s+matching\s+contacts", re.IGNORECASE),
+        ),
+        page.locator("button").filter(
+            has_text=re.compile(r"see\s+matching\s+contacts", re.IGNORECASE)
+        ),
+        page.locator(
+            'button[data-ng-click*="search"], '
+            'button[ng-click*="search"], '
+            'button[aria-label*="matching contacts" i]'
+        ),
+        page.get_by_text(
+            re.compile(r"^\s*see\s+matching\s+contacts\s*$", re.IGNORECASE)
+        ),
+    )
+
+    page.keyboard.press("Escape")
+    _dismiss_popups(page)
+    page.wait_for_timeout(1000)
+
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        if _click_first_visible(candidates, page, timeout_seconds=3):
+            return
+
+        clicked = page.evaluate(
+            """() => {
+                const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const buttons = [...document.querySelectorAll('button, [role="button"]')];
+                const target = buttons.find(button => {
+                    const text = normalize(button.innerText || button.getAttribute('aria-label'));
+                    const style = window.getComputedStyle(button);
+                    return text.includes('see matching contacts')
+                        && style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && !button.disabled;
+                });
+                if (!target) return false;
+                target.click();
+                return true;
+            }"""
+        )
+        if clicked:
+            return
+        page.wait_for_timeout(500)
+
+    raise TimeoutError("See matching contacts button did not appear after retries")
+
+
 def _apply_location_tab(page: Page, tab_name: str, values: list[str]) -> None:
     cleaned_values = [v.strip() for v in values if isinstance(v, str) and v.strip()]
     if not cleaned_values:
@@ -440,17 +492,4 @@ def apply_filters(page: Page, filters: dict, log_callback=None) -> None:
     if log_callback:
         log_callback("Submitting search: clicking 'See matching contacts'...")
 
-    matching_contacts_candidates = (
-        page.get_by_role(
-            "button",
-            name="See matching contacts",
-            exact=True,
-        ),
-        page.get_by_text("See matching contacts", exact=True),
-    )
-    if not _click_first_visible(
-        matching_contacts_candidates,
-        page,
-        timeout_seconds=30,
-    ):
-        raise TimeoutError("See matching contacts button did not appear")
+    _submit_search(page)

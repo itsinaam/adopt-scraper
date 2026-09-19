@@ -442,9 +442,6 @@ def scrape_prospects(page: Page, log_callback=None) -> list[dict[str, str]]:
     )
     _wait_for_pagination(page)
 
-    # Set rows per page to 100 as requested
-    _set_rows_per_page(page, count="100", log_callback=log_callback)
-
     results = []
     seen = set()
     page_num = 1
