@@ -29,6 +29,10 @@ class Task(models.Model):
         default=dict,
         help_text="Search filters applied on Adapt.io",
     )
+    verification = models.BooleanField(
+        default=True,
+        help_text="Whether to verify generated email candidates with MailTester",
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -89,6 +93,18 @@ class Task(models.Model):
         max_length=1000,
         blank=True,
         help_text="Supabase storage direct / signed download URL",
+    )
+
+    combinations_path = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="Local file path or Supabase Storage key for email combinations",
+    )
+
+    combinations_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        help_text="Supabase storage direct / signed download URL for email combinations",
     )
 
     error = models.TextField(

@@ -90,6 +90,9 @@ class TaskSerializer(serializers.ModelSerializer):
     download_url = serializers.SerializerMethodField(
         help_text="Direct or signed download URL for the generated CSV result file."
     )
+    combinations_download_url = serializers.SerializerMethodField(
+        help_text="Download URL for the generated email combinations CSV file."
+    )
 
     class Meta:
         model = Task
@@ -101,6 +104,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "email",
             "password",
             "filters",
+            "verification",
             "status",
             "current_step",
             "progress",
@@ -113,7 +117,10 @@ class TaskSerializer(serializers.ModelSerializer):
             "completed_at",
             "result_path",
             "result_url",
+            "combinations_path",
+            "combinations_url",
             "download_url",
+            "combinations_download_url",
             "error",
             "logs",
             "created_at",
@@ -133,6 +140,8 @@ class TaskSerializer(serializers.ModelSerializer):
             "completed_at",
             "result_path",
             "result_url",
+            "combinations_path",
+            "combinations_url",
             "download_url",
             "error",
             "logs",
@@ -156,6 +165,17 @@ class TaskSerializer(serializers.ModelSerializer):
         if obj.result_url:
             return obj.result_url
         return f"/api/tasks/{obj.pk}/download/"
+
+    def get_combinations_download_url(self, obj: Task) -> str:
+        if obj.status != Task.Status.COMPLETED:
+            return ""
+        if obj.combinations_url:
+            return obj.combinations_url
+        request = self.context.get("request")
+        path = f"/api/tasks/{obj.pk}/download/?file=combinations"
+        if request:
+            return request.build_absolute_uri(path)
+        return path
 
     def validate(self, attrs):
         import os
@@ -188,6 +208,29 @@ class TaskSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Filters must be an object."
             )
+        read_only_fields = [
+            "id",
+            "status",
+            "current_step",
+            "progress",
+            "message",
+            "total_scraped_leads",
+            "total_candidates_generated",
+            "total_verified_emails",
+            "verified_leads",
+            "started_at",
+            "completed_at",
+            "result_path",
+            "result_url",
+            "combinations_path",
+            "combinations_url",
+            "download_url",
+            "error",
+            "logs",
+            "created_at",
+            "updated_at",
+            "combinations_download_url",
+        ]
 
         unknown_fields = set(value) - set(FILTER_FIELDS)
         if unknown_fields:
@@ -267,6 +310,11 @@ class StartTaskRequestSerializer(serializers.Serializer):
         default=dict,
         help_text="Search filters for scraping leads",
     )
+    verification = serializers.BooleanField(
+        required=False,
+        default=True,
+        help_text="Set false to skip email verification and export scraped leads plus combinations",
+    )
 
 
 class TaskLogItemSerializer(serializers.Serializer):
@@ -297,6 +345,10 @@ class TaskResultsResponseSerializer(serializers.Serializer):
     total_candidates_generated = serializers.IntegerField(help_text="Total permutation candidate pairs created")
     total_verified_emails = serializers.IntegerField(help_text="Total verified valid emails found")
     download_url = serializers.CharField(allow_blank=True, help_text="CSV file download link")
+    combinations_download_url = serializers.CharField(
+        allow_blank=True,
+        help_text="Email combinations CSV file download link",
+    )
     completed_at = serializers.DateTimeField(allow_null=True)
     logs = TaskLogItemSerializer(many=True, default=list, help_text="Chronological task log events")
     verified_leads = LeadContactSerializer(many=True, help_text="List of all verified leads")
@@ -317,6 +369,9 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
     task_started_at = serializers.DateTimeField(source="started_at", read_only=True)
     task_completed_at = serializers.DateTimeField(source="completed_at", read_only=True)
     url_of_file = serializers.SerializerMethodField(help_text="Direct or signed download URL for the CSV file")
+    url_of_combinations_file = serializers.SerializerMethodField(
+        help_text="Direct or signed download URL for the email combinations CSV file"
+    )
 
     class Meta:
         model = Task
@@ -331,6 +386,7 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
             "task_started_at",
             "task_completed_at",
             "url_of_file",
+            "url_of_combinations_file",
         ]
 
     @extend_schema_field(serializers.DictField)
@@ -361,6 +417,29 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
 
         request = self.context.get("request")
         path = f"/api/tasks/{obj.pk}/download/"
+        if request:
+            return request.build_absolute_uri(path)
+        return path
+
+    @extend_schema_field(serializers.CharField)
+    def get_url_of_combinations_file(self, obj: Task) -> str:
+        from .storage import supabase_storage
+        if obj.combinations_path and obj.combinations_path.startswith("tasks/"):
+            try:
+                signed = supabase_storage.create_signed_url(
+                    obj.combinations_path,
+                    expires_in=7 * 24 * 3600,
+                )
+                if signed:
+                    return signed
+            except Exception:
+                pass
+
+        if obj.combinations_url:
+            return obj.combinations_url
+
+        request = self.context.get("request")
+        path = f"/api/tasks/{obj.pk}/download/?file=combinations"
         if request:
             return request.build_absolute_uri(path)
         return path

@@ -226,6 +226,7 @@ class TaskResultsView(APIView):
             )
 
         download_link = task.result_url or f"/api/tasks/{task.pk}/download/"
+        combinations_download_link = task.combinations_url or f"/api/tasks/{task.pk}/download/?file=combinations"
         data = {
             "task_id": task.pk,
             "task_name": task.task_name,
@@ -236,6 +237,7 @@ class TaskResultsView(APIView):
             "total_candidates_generated": task.total_candidates_generated,
             "total_verified_emails": task.total_verified_emails,
             "download_url": download_link,
+            "combinations_download_url": combinations_download_link,
             "completed_at": task.completed_at,
             "logs": task.logs or [],
             "verified_leads": task.verified_leads,
@@ -277,19 +279,29 @@ class DownloadTaskView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # 1. If stored in Supabase Storage or result_url is available
-        if task.result_path and task.result_path.startswith("tasks/"):
-            signed_url = supabase_storage.create_signed_url(task.result_path, expires_in=3600)
+        requested_file = request.query_params.get("file", "leads")
+        if requested_file not in {"leads", "combinations"}:
+            return Response(
+                {"detail": "file must be either 'leads' or 'combinations'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        selected_path = task.result_path if requested_file == "leads" else task.combinations_path
+        selected_url = task.result_url if requested_file == "leads" else task.combinations_url
+
+        # 1. If stored in Supabase Storage or a direct URL is available
+        if selected_path and selected_path.startswith("tasks/"):
+            signed_url = supabase_storage.create_signed_url(selected_path, expires_in=3600)
             if signed_url:
                 return HttpResponseRedirect(signed_url)
 
-        if task.result_url:
-            return HttpResponseRedirect(task.result_url)
+        if selected_url:
+            return HttpResponseRedirect(selected_url)
 
         # 2. Fallback to local filesystem if available
-        if task.result_path:
+        if selected_path:
             results_directory = (Path(settings.BASE_DIR) / "results").resolve()
-            result_path = Path(task.result_path).resolve()
+            result_path = Path(selected_path).resolve()
             if results_directory in result_path.parents and result_path.is_file():
                 return FileResponse(
                     result_path.open("rb"),
@@ -311,7 +323,11 @@ class StartTaskView(APIView):
 
     @extend_schema(
         summary="Start Lead Scraping Task",
-        description="Creates and spawns a background Adapt.io scraping & MailTester verification task.",
+        description=(
+            "Creates and spawns a background Adapt.io scraping task. Set verification=true "
+            "to verify email candidates; set verification=false to skip verification and "
+            "receive separate leads and combinations CSV files."
+        ),
         request=StartTaskRequestSerializer,
         examples=[
             OpenApiExample(
@@ -320,6 +336,7 @@ class StartTaskView(APIView):
                 description="Starts scraping with custom task_name and filter constraints.",
                 value={
                     "task_name": "Tech Executives US & UK",
+                    "verification": False,
                     "filters": {
                         "job_titles": ["CEO", "Founder", "Managing Director"],
                         "industries": ["Information Technology and Services", "Computer Software"],
@@ -337,6 +354,7 @@ class StartTaskView(APIView):
                     "task_name": "Finance Leaders Campaign",
                     "email": "umer@techfy.io",
                     "password": "your_adapt_password",
+                    "verification": True,
                     "filters": {
                         "job_titles": ["CFO", "Chief Financial Officer"],
                         "industries": ["Software", "Information Technology"],
@@ -352,6 +370,7 @@ class StartTaskView(APIView):
                 description="Starts scraping with task_name without filter constraints.",
                 value={
                     "task_name": "Minimal Scraping Run",
+                    "verification": True,
                     "filters": {},
                 },
                 request_only=True,
@@ -377,6 +396,7 @@ class StartTaskView(APIView):
         password = serializer.validated_data["password"]
         filters = serializer.validated_data.get("filters", {})
         task_name = serializer.validated_data.get("task_name", "")
+        verification = serializer.validated_data.get("verification", True)
 
         now = timezone.now()
         task = Task.objects.create(
@@ -384,6 +404,7 @@ class StartTaskView(APIView):
             task_name=task_name,
             account_email=account_email,
             filters=filters,
+            verification=verification,
             status=Task.Status.RUNNING,
             current_step="STARTING",
             progress=0,
@@ -467,6 +488,8 @@ class RetryTaskView(APIView):
         task.verified_leads = []
         task.result_path = ""
         task.result_url = ""
+        task.combinations_path = ""
+        task.combinations_url = ""
         task.started_at = now
         task.add_log("Failed task retry initialized and queued.", step="RETRYING")
         task.save()

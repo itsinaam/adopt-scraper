@@ -90,10 +90,7 @@ def run_task(task_id: int, password: str):
                 f"Could not generate email candidates for {raw_row_count} scraped leads"
             )
 
-        enable_verification = (
-            os.getenv("ENABLE_MAILTESTER_VERIFICATION", "true").strip().lower()
-            in ("true", "1", "yes")
-        )
+        enable_verification = task.verification
 
         valid_emails = set()
         stats = {}
@@ -135,7 +132,7 @@ def run_task(task_id: int, password: str):
             ]
         else:
             log_step(
-                f"Email verification bypassed (ENABLE_MAILTESTER_VERIFICATION=false). "
+                f"Email verification bypassed (verification=false). "
                 f"Exporting all {raw_row_count} leads and {len(candidates)} candidate combinations...",
                 step="SAVING_RESULTS",
                 progress=90,
@@ -218,6 +215,8 @@ def run_task(task_id: int, password: str):
         # Upload CSV to Supabase Storage bucket if configured
         storage_url = ""
         storage_path = str(result_path)
+        combinations_storage_url = ""
+        combinations_storage_path = str(combinations_path)
         if supabase_storage.is_configured:
             try:
                 storage_result = supabase_storage.upload_file(
@@ -229,6 +228,17 @@ def run_task(task_id: int, password: str):
                     storage_path = storage_result.get("storage_path", storage_path)
                     storage_url = storage_result.get("url", "")
                     log_step("Exported CSV uploaded to cloud storage.", step="UPLOADED")
+
+                combinations_storage_result = supabase_storage.upload_file(
+                    file_path=combinations_path,
+                    destination_name=combinations_filename,
+                    content_type="text/csv",
+                )
+                if combinations_storage_result:
+                    combinations_storage_path = combinations_storage_result.get(
+                        "storage_path", combinations_storage_path
+                    )
+                    combinations_storage_url = combinations_storage_result.get("url", "")
             except Exception as upload_err:
                 logger.warning("Supabase storage upload error (will fallback to local): %s", upload_err)
 
@@ -254,6 +264,8 @@ def run_task(task_id: int, password: str):
         task.message = completion_msg
         task.result_path = storage_path
         task.result_url = storage_url
+        task.combinations_path = combinations_storage_path
+        task.combinations_url = combinations_storage_url
         task.completed_at = timezone.now()
         task.add_log(completion_msg, step="COMPLETED")
         print(f"[TASK {task_id}] [COMPLETED] {completion_msg}", flush=True)
@@ -270,6 +282,8 @@ def run_task(task_id: int, password: str):
                 "logs",
                 "result_path",
                 "result_url",
+                "combinations_path",
+                "combinations_url",
                 "completed_at",
                 "updated_at",
             ]
