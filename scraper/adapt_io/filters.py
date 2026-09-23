@@ -222,6 +222,7 @@ def _first_visible_locator(
 
 def _submit_search(page: Page) -> None:
     candidates = (
+        page.locator("button.see-matching-contacts:enabled"),
         page.get_by_role(
             "button",
             name=re.compile(r"see\s+matching\s+contacts", re.IGNORECASE),
@@ -256,7 +257,7 @@ def _submit_search(page: Page) -> None:
                 const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
                 const buttons = [...document.querySelectorAll(
                     'button, [role="button"], a, input[type="submit"], '
-                    '[data-ng-click*="search"], [ng-click*="search"]'
+                    + '[data-ng-click*="search"], [ng-click*="search"]'
                 )];
                 const target = buttons.find(button => {
                     const text = normalize(
