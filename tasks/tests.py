@@ -403,19 +403,57 @@ class TaskAPITests(APITestCase):
             account_email="active@example.com",
             status=Task.Status.RUNNING,
         )
+        t_unverified = Task.objects.create(
+            account_email="unverified@example.com",
+            status=Task.Status.COMPLETED,
+            verification=False,
+            result_url="https://example.com/unverified.csv",
+            result_path="tasks/unverified.csv",
+        )
 
         response = self.client.get("/api/tasks/completed/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["total"], 1)
-        item = response.data["tasks"][0]
+        self.assertEqual(response.data["total"], 2)
+        item = next(item for item in response.data["tasks"] if item["task_id"] == t_completed.pk)
         self.assertEqual(item["task_id"], t_completed.pk)
         self.assertEqual(item["total_leads_scraped"], 500)
         self.assertEqual(item["total_combinations"], 4000)
         self.assertEqual(item["total_verified_emails"], 120)
+        self.assertTrue(item["verification"])
+        self.assertEqual(item["status"], Task.Status.COMPLETED)
         self.assertEqual(item["url_of_file"], "https://example.com/results.csv")
+        self.assertNotIn("url_of_combinations_file", item)
         self.assertEqual(item["filters"]["job_titles"], ["CEO"])
         self.assertIn("task_started_at", item)
         self.assertIn("task_completed_at", item)
+
+        unverified_item = next(
+            item for item in response.data["tasks"] if item["task_id"] == t_unverified.pk
+        )
+        self.assertFalse(unverified_item["verification"])
+        self.assertEqual(unverified_item["url_of_file"], "https://example.com/unverified.csv")
+        self.assertIn("url_of_combinations_file", unverified_item)
+
+        failed_task = Task.objects.create(
+            account_email="failed@example.com",
+            status=Task.Status.FAILED,
+            error="Scraping timeout",
+        )
+        failed_response = self.client.get("/api/tasks/completed/?status=failed")
+        self.assertEqual(failed_response.status_code, 200)
+        self.assertEqual(failed_response.data["total"], 1)
+        self.assertEqual(failed_response.data["tasks"][0]["task_id"], failed_task.pk)
+        self.assertEqual(failed_response.data["tasks"][0]["status"], Task.Status.FAILED)
+        self.assertEqual(failed_response.data["tasks"][0]["url_of_file"], "")
+
+        running_response = self.client.get("/api/tasks/completed/?status=running")
+        self.assertEqual(running_response.status_code, 200)
+        self.assertEqual(running_response.data["total"], 1)
+        self.assertEqual(running_response.data["tasks"][0]["status"], Task.Status.RUNNING)
+
+        all_response = self.client.get("/api/tasks/completed/?status=all")
+        self.assertEqual(all_response.status_code, 200)
+        self.assertEqual(all_response.data["total"], 4)
 
     def test_completed_task_by_id_endpoint(self):
         from django.utils import timezone

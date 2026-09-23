@@ -366,6 +366,8 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
     total_leads_scraped = serializers.IntegerField(source="total_scraped_leads", read_only=True)
     total_combinations = serializers.IntegerField(source="total_candidates_generated", read_only=True)
     total_verified_emails = serializers.IntegerField(read_only=True)
+    verification = serializers.BooleanField(read_only=True)
+    status = serializers.CharField(read_only=True)
     task_started_at = serializers.DateTimeField(source="started_at", read_only=True)
     task_completed_at = serializers.DateTimeField(source="completed_at", read_only=True)
     url_of_file = serializers.SerializerMethodField(help_text="Direct or signed download URL for the CSV file")
@@ -383,11 +385,19 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
             "total_leads_scraped",
             "total_combinations",
             "total_verified_emails",
+            "verification",
+            "status",
             "task_started_at",
             "task_completed_at",
             "url_of_file",
             "url_of_combinations_file",
         ]
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if instance.verification:
+            representation.pop("url_of_combinations_file", None)
+        return representation
 
     @extend_schema_field(serializers.DictField)
     def get_filters(self, obj: Task):
@@ -404,6 +414,13 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.CharField)
     def get_url_of_file(self, obj: Task) -> str:
         from .storage import supabase_storage
+
+        if obj.status != Task.Status.COMPLETED:
+            return ""
+
+        if not obj.verification and obj.result_url:
+            return obj.result_url
+
         if obj.result_path and obj.result_path.startswith("tasks/"):
             try:
                 signed = supabase_storage.create_signed_url(obj.result_path, expires_in=7 * 24 * 3600)
@@ -424,6 +441,13 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.CharField)
     def get_url_of_combinations_file(self, obj: Task) -> str:
         from .storage import supabase_storage
+
+        if obj.status != Task.Status.COMPLETED:
+            return ""
+
+        if not obj.verification and obj.combinations_url:
+            return obj.combinations_url
+
         if obj.combinations_path and obj.combinations_path.startswith("tasks/"):
             try:
                 signed = supabase_storage.create_signed_url(

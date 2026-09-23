@@ -5,6 +5,7 @@ from django.http import FileResponse, HttpResponseRedirect
 from django.utils import timezone
 from drf_spectacular.utils import (
     OpenApiExample,
+    OpenApiParameter,
     OpenApiResponse,
     extend_schema,
     inline_serializer,
@@ -128,16 +129,26 @@ class TaskListView(APIView):
 
 class CompletedTasksView(APIView):
     """
-    Retrieves all successfully completed scraping tasks with download URLs and key metrics.
+    Retrieves scraping tasks filtered by status with download URLs and key metrics.
     """
 
     @extend_schema(
         summary="List Completed Scraping Tasks",
         description=(
-            "Returns a lightweight list of all completed tasks with filters, "
-            "scraped leads count, permutation combinations, start/completion times, "
-            "and direct file download URLs."
+            "Returns lightweight task records. Use ?status=completed, failed, running, "
+            "or all. The default is completed."
         ),
+        parameters=[
+            OpenApiParameter(
+                name="status",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                enum=["completed", "failed", "running", "all"],
+                default="completed",
+                description="Filter tasks by execution status.",
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 description="List of completed tasks",
@@ -154,7 +165,21 @@ class CompletedTasksView(APIView):
         tags=["Tasks"],
     )
     def get(self, request, task_id: int = None):
-        base_qs = Task.objects.filter(status=Task.Status.COMPLETED)
+        status_param = request.query_params.get("status", "completed").lower()
+        valid_statuses = {
+            "completed": Task.Status.COMPLETED,
+            "failed": Task.Status.FAILED,
+            "running": Task.Status.RUNNING,
+        }
+        if status_param != "all" and status_param not in valid_statuses:
+            return Response(
+                {"detail": "status must be one of: completed, failed, running, all."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        base_qs = Task.objects.all()
+        if status_param != "all":
+            base_qs = base_qs.filter(status=valid_statuses[status_param])
         if request.user and request.user.is_authenticated and not request.user.is_superuser:
             base_qs = base_qs.filter(user=request.user)
 
@@ -162,7 +187,7 @@ class CompletedTasksView(APIView):
             task = base_qs.filter(pk=task_id).first()
             if not task:
                 return Response(
-                    {"detail": "Completed task not found."},
+                    {"detail": "Task not found for the requested status filter."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
             serializer = CompletedTaskSerializer(task, context={"request": request})
