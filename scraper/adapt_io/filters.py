@@ -235,6 +235,9 @@ def _submit_search(page: Page) -> None:
             'button[aria-label*="matching contacts" i]'
         ),
         page.get_by_text(
+            re.compile(r"see\s+matching\s+contacts", re.IGNORECASE)
+        ),
+        page.get_by_text(
             re.compile(r"^\s*see\s+matching\s+contacts\s*$", re.IGNORECASE)
         ),
     )
@@ -251,9 +254,17 @@ def _submit_search(page: Page) -> None:
         clicked = page.evaluate(
             """() => {
                 const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                const buttons = [...document.querySelectorAll('button, [role="button"]')];
+                const buttons = [...document.querySelectorAll(
+                    'button, [role="button"], a, input[type="submit"], '
+                    '[data-ng-click*="search"], [ng-click*="search"]'
+                )];
                 const target = buttons.find(button => {
-                    const text = normalize(button.innerText || button.getAttribute('aria-label'));
+                    const text = normalize(
+                        button.innerText
+                        || button.textContent
+                        || button.getAttribute('aria-label')
+                        || button.getAttribute('title')
+                    );
                     const style = window.getComputedStyle(button);
                     return text.includes('see matching contacts')
                         && style.display !== 'none'
@@ -269,7 +280,10 @@ def _submit_search(page: Page) -> None:
             return
         page.wait_for_timeout(500)
 
-    raise TimeoutError("See matching contacts button did not appear after retries")
+    raise TimeoutError(
+        "See matching contacts control did not appear after retries "
+        f"(url={page.url!r}, title={page.title()!r})"
+    )
 
 
 def _apply_location_tab(page: Page, tab_name: str, values: list[str]) -> None:
