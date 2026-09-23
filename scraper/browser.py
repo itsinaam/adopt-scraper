@@ -55,6 +55,10 @@ class BrowserManager:
 
     @staticmethod
     def _proxy_settings() -> dict | None:
+        proxy_enabled = os.getenv("WEBSHARE_PROXY_ENABLED", "false").lower() == "true"
+        if not proxy_enabled:
+            return None
+
         server = os.getenv("WEBSHARE_PROXY_SERVER")
         username = os.getenv("WEBSHARE_PROXY_USERNAME")
         password = os.getenv("WEBSHARE_PROXY_PASSWORD")
