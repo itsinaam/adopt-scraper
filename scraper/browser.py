@@ -43,7 +43,10 @@ class BrowserManager:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-            "viewport": {"width": 1920, "height": 1080},
+            "viewport": {
+                "width": int(os.getenv("PLAYWRIGHT_VIEWPORT_WIDTH", "1366")),
+                "height": int(os.getenv("PLAYWRIGHT_VIEWPORT_HEIGHT", "768")),
+            },
         }
 
         if storage_state is not None:

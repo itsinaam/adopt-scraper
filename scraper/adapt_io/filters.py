@@ -321,28 +321,40 @@ def _apply_location_tab(page: Page, tab_name: str, values: list[str]) -> None:
     )
 
     for item in cleaned_values:
+        search_term = item.split(",", 1)[0].strip()
         tab_input.fill("")
-        tab_input.fill(item)
+        tab_input.fill(search_term)
         page.wait_for_timeout(400)
 
-        # Select the first result matching the search from the suggestion dropdown
-        first_result_candidates = (
-            page.locator(".suggestion-wrapper").get_by_text(
-                re.compile(rf"^\s*{re.escape(item)}", re.IGNORECASE)
-            ),
-            page.locator(".suggestion-wrapper [role='option']"),
-            page.locator(".suggestion-wrapper label"),
-            page.locator(".suggestion-wrapper [class*='item']"),
-            page.locator(".suggestion-wrapper [class*='suggestion']"),
-            page.locator(".suggestion-wrapper > div").filter(has_text=re.compile(r"\S")),
-            page.locator(".suggestion-wrapper > *").filter(has_text=re.compile(r"\S")),
-            page.get_by_text(
-                re.compile(
-                    rf"^{re.escape(item)}.*$",
-                    re.IGNORECASE,
+        # Full locations must match one result exactly; city-only inputs use the first result.
+        if "," in item:
+            exact_pattern = re.compile(
+                rf"^\s*{re.escape(item)}\s*$",
+                re.IGNORECASE,
+            )
+            first_result_candidates = (
+                page.locator(".suggestion-wrapper").get_by_text(exact_pattern),
+                page.locator(".suggestion-wrapper [role='option']").filter(has_text=exact_pattern),
+                page.locator(".suggestion-wrapper label").filter(has_text=exact_pattern),
+                page.locator(".suggestion-wrapper [class*='item']").filter(has_text=exact_pattern),
+                page.locator(".suggestion-wrapper [class*='suggestion']").filter(has_text=exact_pattern),
+                page.get_by_text(exact_pattern),
+            )
+        else:
+            first_result_candidates = (
+                page.locator(".suggestion-wrapper [role='option']"),
+                page.locator(".suggestion-wrapper label"),
+                page.locator(".suggestion-wrapper [class*='item']"),
+                page.locator(".suggestion-wrapper [class*='suggestion']"),
+                page.locator(".suggestion-wrapper > div").filter(has_text=re.compile(r"\S")),
+                page.locator(".suggestion-wrapper > *").filter(has_text=re.compile(r"\S")),
+                page.get_by_text(
+                    re.compile(
+                        rf"^{re.escape(item)}.*$",
+                        re.IGNORECASE,
+                    )
                 ),
-            ),
-        )
+            )
 
         if not _click_first_visible(
             first_result_candidates,
