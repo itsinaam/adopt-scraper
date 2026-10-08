@@ -26,6 +26,8 @@ class BrowserManager:
                 "--disable-dev-shm-usage",
                 "--disable-setuid-sandbox",
                 "--disable-gpu",
+                "--start-maximized",
+                f"--force-device-scale-factor={os.getenv('PLAYWRIGHT_SCALE_FACTOR', '0.8')}",
             ],
         }
         proxy = self._proxy_settings()
@@ -44,8 +46,8 @@ class BrowserManager:
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
             "viewport": {
-                "width": int(os.getenv("PLAYWRIGHT_VIEWPORT_WIDTH", "1366")),
-                "height": int(os.getenv("PLAYWRIGHT_VIEWPORT_HEIGHT", "768")),
+                "width": int(os.getenv("PLAYWRIGHT_VIEWPORT_WIDTH", "1920")),
+                "height": int(os.getenv("PLAYWRIGHT_VIEWPORT_HEIGHT", "1080")),
             },
         }
 

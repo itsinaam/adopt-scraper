@@ -7,6 +7,8 @@ and OpenAPI 3.0 / Swagger documentation via drf-spectacular.
 
 import os
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
 from django.core.exceptions import ImproperlyConfigured
 import dj_database_url
 from dotenv import load_dotenv
@@ -14,6 +16,35 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
+
+
+def normalize_database_url(raw_url: str) -> str:
+    """Percent-encode credentials in a database URL so raw special characters in passwords do not break Django parsing."""
+    if not raw_url:
+        return raw_url
+
+    url = raw_url.strip()
+    if url.startswith("postgresql+psycopg2://"):
+        url = url.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url
+
+    if not parsed.scheme or not parsed.netloc or "@" not in parsed.netloc:
+        return url
+
+    auth, hostinfo = parsed.netloc.rsplit("@", 1)
+    if ":" not in auth:
+        return url
+
+    username, password = auth.split(":", 1)
+    safe_username = quote(unquote(username), safe="")
+    safe_password = quote(unquote(password), safe="")
+    normalized_netloc = f"{safe_username}:{safe_password}@{hostinfo}"
+    return urlunsplit((parsed.scheme, normalized_netloc, parsed.path, parsed.query, parsed.fragment))
+
 
 RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -122,9 +153,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 import sys
 
 # Database - Supabase / Railway PostgreSQL Connection
-raw_database_url = os.getenv("DATABASE_URL", "").strip()
-if raw_database_url.startswith("postgresql+psycopg2://"):
-    raw_database_url = raw_database_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+raw_database_url = normalize_database_url(os.getenv("DATABASE_URL", ""))
 
 if "test" in sys.argv:
     DATABASES = {

@@ -8,6 +8,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 logger = logging.getLogger(__name__)
 
 CONTACT_LINK_SELECTOR = 'a[href*="linkedin.com/in/"]'
+CONTACT_RESULT_SELECTOR = 'a[href*="linkedin.com/in/"], .contact-name-wrapper'
 
 
 def _write_pagination_debug(message: str) -> None:
@@ -42,19 +43,24 @@ def _pagination_debug(page: Page, stage: str, visible_count: int = 0) -> str:
 
 def _extract_visible_contacts(page: Page) -> list[dict[str, str]]:
     """Extract contact cards from Adapt.io's div-based results grid."""
-    return page.locator(CONTACT_LINK_SELECTOR).evaluate_all(
+    return page.locator(CONTACT_RESULT_SELECTOR).evaluate_all(
         """
-        (links) => {
+        (sources) => {
             const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/ig;
             const phonePattern = /(?:\\+?\\d[\\d ()-]{7,}\\d)/g;
             const rows = [];
             const seen = new Set();
 
-            for (const link of links) {
-                let row = link;
+            for (const source of sources) {
+                const link = source.matches('a[href*="linkedin.com/in/"]')
+                    ? source
+                    : source.querySelector('a[href*="linkedin.com/in/"]');
+                let row = source;
                 while (row.parentElement) {
                     const parent = row.parentElement;
-                    if (parent.querySelectorAll('a[href*="linkedin.com/in/"]').length !== 1) {
+                    const contactNames = parent.querySelectorAll('.contact-name-wrapper');
+                    const linkedinLinks = parent.querySelectorAll('a[href*="linkedin.com/in/"]');
+                    if (contactNames.length > 1 || (link && linkedinLinks.length !== 1)) {
                         break;
                     }
                     row = parent;
@@ -65,7 +71,7 @@ def _extract_visible_contacts(page: Page) -> list[dict[str, str]]:
                     .split(/\\n+/)
                     .map((value) => value.replace(/\\s+/g, " ").trim())
                     .filter(Boolean);
-                const contactUrl = link.href;
+                const contactUrl = link?.href || "";
                 const key = contactUrl || text;
                 if (!text || seen.has(key)) continue;
                 seen.add(key);
@@ -205,7 +211,7 @@ def _next_page(page: Page, previous_key: str) -> bool:
     pagination_text = pagination.locator(".text").first
     page_label = pagination_text.inner_text() if pagination_text.count() else ""
     page_match = re.search(
-        r"Pages\s+(\d+)\s+of\s+(\d+)",
+        r"Pages?\s+(\d+)\s+of\s+(\d+)",
         page_label,
         re.IGNORECASE,
     )
@@ -440,6 +446,8 @@ def scrape_prospects(page: Page, log_callback=None) -> list[dict[str, str]]:
         state="visible",
         timeout=60_000,
     )
+    _wait_for_pagination(page)
+    _set_rows_per_page(page, count="100", log_callback=log_callback)
     _wait_for_pagination(page)
 
     results = []

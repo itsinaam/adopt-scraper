@@ -14,3 +14,13 @@
         "password": "User2Secure2026!"
      
     }
+
+
+
+# Admin
+
+{
+  "email": "admin@adapt.io",
+  "password": "AdminSecure2026!"
+}
+
