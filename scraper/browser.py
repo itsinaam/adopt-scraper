@@ -107,7 +107,7 @@ class BrowserManager:
         return candidates
 
     @staticmethod
-    def _probe_proxy(proxy: dict) -> bool:
+    def _probe_proxy(proxy: dict, target_url: str = "https://www.adapt.io/login.htm?slc=web&login=true") -> bool:
         server = proxy.get("server")
         if not server:
             return False
@@ -124,11 +124,28 @@ class BrowserManager:
                 opener.addheaders = [("Proxy-Authorization", f"Basic {auth}")]
 
             req = request.Request(
-                "https://example.com",
+                target_url,
                 headers={"User-Agent": "Mozilla/5.0"},
             )
             with opener.open(req, timeout=15) as response:
-                return 200 <= getattr(response, "status", 0) < 400
+                status = getattr(response, "status", 200)
+                body = ""
+                try:
+                    body = response.read().decode("utf-8", errors="ignore").lower()
+                except Exception:
+                    body = ""
+
+                blocked_markers = (
+                    "403 forbidden",
+                    "forbidden",
+                    "nginx",
+                    "access denied",
+                    "blocked",
+                    "too many requests",
+                )
+                if status >= 400 or any(marker in body for marker in blocked_markers):
+                    return False
+                return 200 <= status < 400
         except Exception:
             return False
 
@@ -186,33 +203,6 @@ class BrowserManager:
         self.context = self.browser.new_context(
             **context_options,
         )
-
-    @staticmethod
-    def _proxy_settings() -> dict | None:
-        proxy_enabled = os.getenv("WEBSHARE_PROXY_ENABLED", "false").lower() == "true"
-        if not proxy_enabled:
-            return None
-
-        server = os.getenv("WEBSHARE_PROXY_SERVER")
-        username = os.getenv("WEBSHARE_PROXY_USERNAME")
-        password = os.getenv("WEBSHARE_PROXY_PASSWORD")
-        bypass = os.getenv("WEBSHARE_PROXY_BYPASS", "").strip()
-
-        if not server:
-            return None
-
-        parsed = urlparse(server if "://" in server else f"http://{server}")
-        proxy = {
-            "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
-        }
-        if username and password:
-            proxy.update(
-                username=username,
-                password=password,
-            )
-        if bypass:
-            proxy["bypass"] = bypass
-        return proxy
 
     def new_page(self) -> Page:
         if self.context is None:

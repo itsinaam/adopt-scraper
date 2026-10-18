@@ -27,6 +27,33 @@ def test_proxy_candidates_fallback_order(monkeypatch, tmp_path):
     assert candidates[2]["username"] == "bob"
 
 
+def test_proxy_probe_rejects_blocked_html(monkeypatch):
+    class FakeResponse:
+        status = 403
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"<html><title>403 Forbidden</title><body>nginx</body></html>"
+
+    class FakeOpener:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def addheaders(self, value):
+            self.headers = value
+
+        def open(self, req, timeout=None):
+            return FakeResponse()
+
+    monkeypatch.setattr("scraper.browser.request.build_opener", lambda *args, **kwargs: FakeOpener())
+    assert BrowserManager._probe_proxy({"server": "http://1.1.1.1:80"}) is False
+
+
 def test_browser():
     manager = BrowserManager()
 
