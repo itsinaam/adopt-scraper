@@ -6,6 +6,9 @@ from playwright.sync_api import (
     sync_playwright,
 )
 import os
+import base64
+from pathlib import Path
+from urllib import request
 from urllib.parse import urlparse
 
 
@@ -14,6 +17,131 @@ class BrowserManager:
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
+        self.active_proxy: dict | None = None
+
+    @staticmethod
+    def _proxy_file_path() -> Path:
+        return Path(__file__).resolve().parent.parent / "proxies.txt"
+
+    @staticmethod
+    def _normalize_proxy(server: str, username: str | None = None, password: str | None = None, bypass: str | None = None) -> dict | None:
+        if not server:
+            return None
+
+        candidate = server.strip()
+        if not candidate:
+            return None
+
+        parsed = urlparse(candidate if "://" in candidate else f"http://{candidate}")
+        host = parsed.hostname
+        port = parsed.port
+        if not host or not port:
+            return None
+
+        proxy = {"server": f"{parsed.scheme}://{host}:{port}"}
+        if username:
+            proxy["username"] = username
+        if password:
+            proxy["password"] = password
+        if bypass:
+            proxy["bypass"] = bypass
+        return proxy
+
+    @staticmethod
+    def _proxy_candidates() -> list[dict]:
+        candidates: list[dict] = []
+        seen: set[str] = set()
+
+        proxy_enabled = os.getenv("WEBSHARE_PROXY_ENABLED", "false").lower() == "true"
+        bypass = os.getenv("WEBSHARE_PROXY_BYPASS", "").strip()
+        env_server = os.getenv("WEBSHARE_PROXY_SERVER", "").strip()
+        if env_server:
+            env_proxy = BrowserManager._normalize_proxy(
+                env_server,
+                os.getenv("WEBSHARE_PROXY_USERNAME", "").strip() or None,
+                os.getenv("WEBSHARE_PROXY_PASSWORD", "").strip() or None,
+                bypass or None,
+            )
+            if env_proxy:
+                key = env_proxy["server"]
+                candidates.append(env_proxy)
+                seen.add(key)
+
+        proxy_file = BrowserManager._proxy_file_path()
+        if proxy_file.exists() and (proxy_enabled or env_server or proxy_file.exists()):
+            with proxy_file.open("r", encoding="utf-8", errors="ignore") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+
+                    parts = line.split(":")
+                    if len(parts) < 2:
+                        continue
+
+                    host = parts[0]
+                    port = parts[1]
+                    username = None
+                    password = None
+
+                    if len(parts) >= 4:
+                        username = parts[2]
+                        password = ":".join(parts[3:])
+                    elif len(parts) == 3:
+                        username = parts[2]
+
+                    file_proxy = BrowserManager._normalize_proxy(
+                        f"http://{host}:{port}",
+                        username,
+                        password,
+                    )
+                    if not file_proxy:
+                        continue
+
+                    key = file_proxy["server"]
+                    if key in seen:
+                        continue
+                    candidates.append(file_proxy)
+                    seen.add(key)
+
+        return candidates
+
+    @staticmethod
+    def _probe_proxy(proxy: dict) -> bool:
+        server = proxy.get("server")
+        if not server:
+            return False
+
+        username = proxy.get("username")
+        password = proxy.get("password")
+        proxy_url = server
+
+        try:
+            proxy_handler = request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+            opener = request.build_opener(proxy_handler)
+            if username and password:
+                auth = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+                opener.addheaders = [("Proxy-Authorization", f"Basic {auth}")]
+
+            req = request.Request(
+                "https://example.com",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with opener.open(req, timeout=15) as response:
+                return 200 <= getattr(response, "status", 0) < 400
+        except Exception:
+            return False
+
+    @classmethod
+    def _proxy_settings(cls) -> dict | None:
+        proxy_enabled = os.getenv("WEBSHARE_PROXY_ENABLED", "false").lower() == "true"
+        if not proxy_enabled and not cls._proxy_file_path().exists():
+            return None
+
+        for candidate in cls._proxy_candidates():
+            if cls._probe_proxy(candidate):
+                return candidate
+        return None
 
     def start(self, storage_state: dict | None = None) -> None:
         self.playwright = sync_playwright().start()
@@ -32,6 +160,7 @@ class BrowserManager:
         }
         proxy = self._proxy_settings()
         if proxy:
+            self.active_proxy = proxy
             launch_options["proxy"] = proxy
 
         self.browser = self.playwright.chromium.launch(
